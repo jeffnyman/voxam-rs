@@ -14,6 +14,7 @@ developing it does.
 | Sweep | What it certifies |
 | --- | --- |
 | `header-diff.sh` | `--header` reports over every Z-code story in `entharion/` |
+| `abbreviations-diff.sh` | every abbreviation every Z-code story defines, decoded to identical text units -- the whole text decoder over real data |
 
 The deeper certifications -- seeded recordings replaying
 identically, glulxercise, the Å-machine batteries -- ride the
