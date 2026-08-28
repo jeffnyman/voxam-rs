@@ -11,6 +11,7 @@ pub enum VoxamError {
     ZMachineStory(String),
     ZMachineHeader(String),
     ZMachineMemory(String),
+    ZMachineObject(String),
     ZMachineText(String),
 }
 
@@ -19,6 +20,7 @@ impl fmt::Display for VoxamError {
         let (Self::ZMachineStory(message)
         | Self::ZMachineHeader(message)
         | Self::ZMachineMemory(message)
+        | Self::ZMachineObject(message)
         | Self::ZMachineText(message)) = self;
 
         f.write_str(message)

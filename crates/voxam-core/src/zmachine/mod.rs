@@ -4,6 +4,7 @@
 pub mod dictionary;
 pub mod header;
 pub mod memory;
+pub mod objects;
 pub mod rng;
 pub mod story;
 pub mod zscii;
