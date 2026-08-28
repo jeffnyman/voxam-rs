@@ -16,6 +16,7 @@ developing it does.
 | `header-diff.sh` | `--header` reports over every Z-code story in `entharion/` |
 | `abbreviations-diff.sh` | every abbreviation every Z-code story defines, decoded to identical text units -- the whole text decoder over real data |
 | `dictionary-diff.sh` | every dictionary entry of every Z-code story, decoded, with sampled round-trip lookups -- the decoder, the encoder, and the §13 table walk agreeing |
+| `objects-diff.sh` | every object of every Z-code story -- relations, attributes, short names, and property lists walked linearly with a 64-entry cap against corrupt tables |
 
 The deeper certifications -- seeded recordings replaying
 identically, glulxercise, the Å-machine batteries -- ride the
