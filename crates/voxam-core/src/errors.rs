@@ -11,13 +11,15 @@ pub enum VoxamError {
     ZMachineStory(String),
     ZMachineHeader(String),
     ZMachineMemory(String),
+    ZMachineText(String),
 }
 
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (Self::ZMachineStory(message)
         | Self::ZMachineHeader(message)
-        | Self::ZMachineMemory(message)) = self;
+        | Self::ZMachineMemory(message)
+        | Self::ZMachineText(message)) = self;
 
         f.write_str(message)
     }
