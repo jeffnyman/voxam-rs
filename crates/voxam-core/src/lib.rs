@@ -7,4 +7,6 @@
 //! Frontends -- terminal, window, web, shell -- live in other
 //! crates and consume this one.
 
+pub mod errors;
 pub mod format;
+pub mod zmachine;
