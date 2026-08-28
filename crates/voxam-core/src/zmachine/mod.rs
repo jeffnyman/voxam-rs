@@ -2,11 +2,19 @@
 //! the Z-Machine Standard 1.1.
 
 pub mod dictionary;
+pub mod frames;
 pub mod header;
+pub mod instruction;
 pub mod memory;
 pub mod objects;
+pub mod opcodes;
+pub mod packed;
+pub mod riders;
 pub mod rng;
+pub mod routine;
+pub mod snapshot;
 pub mod story;
+pub mod variables;
 pub mod zscii;
 
 /// Synthetic story files for the module tests: the smallest bytes

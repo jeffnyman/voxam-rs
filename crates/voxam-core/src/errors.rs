@@ -10,8 +10,11 @@ use std::fmt;
 pub enum VoxamError {
     ZMachineStory(String),
     ZMachineHeader(String),
+    ZMachineInstruction(String),
     ZMachineMemory(String),
     ZMachineObject(String),
+    ZMachineRoutine(String),
+    ZMachineStack(String),
     ZMachineText(String),
 }
 
@@ -19,8 +22,11 @@ impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (Self::ZMachineStory(message)
         | Self::ZMachineHeader(message)
+        | Self::ZMachineInstruction(message)
         | Self::ZMachineMemory(message)
         | Self::ZMachineObject(message)
+        | Self::ZMachineRoutine(message)
+        | Self::ZMachineStack(message)
         | Self::ZMachineText(message)) = self;
 
         f.write_str(message)
