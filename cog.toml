@@ -1,0 +1,42 @@
+# Cocogitto — conventional commits, enforced and harvested.
+# The Rust seat for the chair commitizen fills in the Python
+# implementation: `cog verify` guards each message, `cog bump
+# --auto` derives the next version from the history, tags it
+# v-prefixed, and writes the changelog.
+
+tag_prefix = "v"
+ignore_merge_commits = true
+
+branch_whitelist = ["main"]
+
+# Keep the workspace version in lockstep with the tag, as
+# commitizen's version_provider does for pyproject: the bump
+# stamps [workspace.package] before committing. Requires
+# cargo-edit (`cargo install cargo-edit`). When the desktop
+# shell arrives, its tauri.conf.json joins this list.
+pre_bump_hooks = [
+  "cargo set-version --workspace {{version}}",
+  "cargo build",
+  "cargo test",
+]
+
+post_bump_hooks = []
+
+# The same discipline voxam's pre-commit hooks enforce: the
+# message must be conventional, the tree must be formatted and
+# lint-quiet. `cog install-hook --all` deploys these.
+[git_hooks.commit-msg]
+script = """#!/bin/sh
+set -e
+cog verify --file $1
+"""
+
+[git_hooks.pre-commit]
+script = """#!/bin/sh
+set -e
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+"""
+
+[changelog]
+path = "CHANGELOG.md"

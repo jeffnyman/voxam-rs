@@ -1,0 +1,10 @@
+[package]
+name = "voxam"
+description = "A Specification-Accurate Z-Machine and Glulx Implementation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+voxam-core.workspace = true

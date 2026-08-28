@@ -1,0 +1,18 @@
+# Generated project files
+/target
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
+
+# Editor helpers
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Operating system metadata
+**/.directory
+**/.DS_Store
+**/desktop.ini
+**/Thumbs.db

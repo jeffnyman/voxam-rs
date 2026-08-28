@@ -1,0 +1,48 @@
+# Establish project-wide standard of LF line endings.
+* text=auto eol=lf
+
+# Binary files (binary is a macro for -text -diff).
+*.pdf    binary
+*.ico    binary
+*.gif    binary
+*.jpg    binary
+*.png    binary
+*.jpeg   binary
+*.webp   binary
+
+# Z-machine story files
+*.z[1-8]   binary
+*.zblorb   binary
+*.blorb    binary
+*.zlb      binary
+*.blb      binary
+
+# Glulx story files
+*.ulx      binary
+*.gblorb   binary
+
+# Saved games (Quetzal) and other Infocom-era data files
+*.qzl      binary
+*.sav      binary
+*.dat      binary
+
+# The Å-machine's story files
+*.aastory  binary
+
+# Treat SVG files as normalized text instead of binary.
+*.svg    text
+
+# Handle Windows specific files.
+*.cmd    text eol=crlf
+*.bat    text eol=crlf
+*.ps1    text eol=crlf
+*.psm1   text eol=crlf
+
+# Improve diff output.
+*.rs     diff=rust
+*.toml   diff=toml
+
+# Export exclusions for archive.
+.editorconfig            export-ignore
+.gitattributes           export-ignore
+.gitignore               export-ignore
