@@ -8,6 +8,7 @@ use std::fmt;
 /// A rule of one of the machines, enforced with its citation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxamError {
+    ZMachineArithmetic(String),
     ZMachineStory(String),
     ZMachineHeader(String),
     ZMachineInstruction(String),
@@ -16,18 +17,24 @@ pub enum VoxamError {
     ZMachineRoutine(String),
     ZMachineStack(String),
     ZMachineText(String),
+    /// The frontier reporter: pointing Voxam at a story and reading
+    /// this error's message is how the implementation backlog
+    /// announces itself.
+    ZMachineUnimplemented(String),
 }
 
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (Self::ZMachineStory(message)
+        let (Self::ZMachineArithmetic(message)
+        | Self::ZMachineStory(message)
         | Self::ZMachineHeader(message)
         | Self::ZMachineInstruction(message)
         | Self::ZMachineMemory(message)
         | Self::ZMachineObject(message)
         | Self::ZMachineRoutine(message)
         | Self::ZMachineStack(message)
-        | Self::ZMachineText(message)) = self;
+        | Self::ZMachineText(message)
+        | Self::ZMachineUnimplemented(message)) = self;
 
         f.write_str(message)
     }

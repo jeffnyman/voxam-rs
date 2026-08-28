@@ -342,6 +342,39 @@ pub fn char_to_zscii(character: char, extras_table: &[u16]) -> Result<u16, Voxam
     )))
 }
 
+/// Convert one text unit to its ZSCII code (§3.8): the unit-level
+/// mirror of [`char_to_zscii`], for text that lives as raw 16-bit
+/// units -- a stream 3 table's contents, where a surrogate half
+/// may legally stand (§3.8.5.4).
+pub fn unit_to_zscii(unit: u16, extras_table: &[u16]) -> Result<u16, VoxamError> {
+    if unit == u16::from(b'\n') {
+        return Ok(ZSCII_NEWLINE);
+    }
+
+    if unit == 8 || unit == 127 {
+        return Ok(ZSCII_DELETE);
+    }
+
+    if unit == 27 {
+        return Ok(ZSCII_ESCAPE);
+    }
+
+    if (ZSCII_PRINTABLE_START..=ZSCII_PRINTABLE_END).contains(&unit)
+        || (ZSCII_INPUT_KEYS_START..=ZSCII_INPUT_KEYS_END).contains(&unit)
+    {
+        return Ok(unit);
+    }
+
+    if let Some(position) = extras_table.iter().position(|&entry| entry == unit) {
+        return Ok(ZSCII_EXTRA_START + position as u16);
+    }
+
+    Err(text_error(format!(
+        "the character {:?} has no ZSCII code (§3.8)",
+        char::from_u32(u32::from(unit)).unwrap_or(char::REPLACEMENT_CHARACTER)
+    )))
+}
+
 /// Encode typed text in dictionary form (§3.7).
 ///
 /// The text is lowercased, encoded without abbreviations, padded

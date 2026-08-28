@@ -5,6 +5,7 @@ pub mod dictionary;
 pub mod frames;
 pub mod header;
 pub mod instruction;
+pub mod machine;
 pub mod memory;
 pub mod objects;
 pub mod opcodes;

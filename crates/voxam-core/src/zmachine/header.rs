@@ -301,6 +301,171 @@ impl<'a> Header<'a> {
     }
 }
 
+/// The write side of the header: the interpreter stamping its
+/// honest capabilities into the working image (§11.1). These are
+/// the fields marked Rst in §11's table -- set at boot, and reset
+/// after every restore and restart (§6.1.2.2). The Python
+/// reference hangs these on a live header view; here they are free
+/// functions over the mutable memory, for the same borrow reasons
+/// as the object table.
+pub mod declare {
+    use super::*;
+    use crate::zmachine::memory::Memory;
+
+    const NO_STATUS_LINE_BIT: u8 = 0x10;
+    const SCREEN_SPLIT_BIT: u8 = 0x20;
+    const BOLD_BIT: u8 = 0x04;
+    const ITALIC_BIT: u8 = 0x08;
+    const FIXED_PITCH_BIT: u8 = 0x10;
+    const TIMED_INPUT_BIT: u8 = 0x80;
+    const COLOURS_BIT: u8 = 0x01;
+    const FLAGS_2_LOW: usize = 0x11;
+    const SOUND_BIT: u8 = 0x80;
+    const GRAPHICS_BIT: u8 = 0x08;
+    const MOUSE_BIT: u8 = 0x20;
+    const STANDARD_MAJOR_ADDRESS: usize = 0x32;
+    const STANDARD_MINOR_ADDRESS: usize = 0x33;
+    const INTERPRETER_NUMBER: usize = 0x1E;
+    const INTERPRETER_VERSION: usize = 0x1F;
+    const SCREEN_LINES: usize = 0x20;
+    const SCREEN_COLUMNS: usize = 0x21;
+    const SCREEN_WIDTH_UNITS: usize = 0x22;
+    const SCREEN_HEIGHT_UNITS: usize = 0x24;
+    const FONT_WIDTH: usize = 0x26;
+    const FONT_HEIGHT: usize = 0x27;
+    const DEFAULT_BACKGROUND_ADDRESS: usize = 0x2C;
+    const DEFAULT_FOREGROUND_ADDRESS: usize = 0x2D;
+
+    fn set_flag(memory: &mut Memory, bit: u8, on: bool) -> Result<(), VoxamError> {
+        let flags = memory.read_byte(FLAGS_1)?;
+        let flags = if on { flags | bit } else { flags & !bit };
+
+        memory.write_byte(FLAGS_1, flags)
+    }
+
+    /// Record which Standard revision the interpreter obeys
+    /// (§11.1.5).
+    pub fn standard_revision(memory: &mut Memory, major: u8, minor: u8) -> Result<(), VoxamError> {
+        memory.write_byte(STANDARD_MAJOR_ADDRESS, major)?;
+        memory.write_byte(STANDARD_MINOR_ADDRESS, minor)
+    }
+
+    /// Record whether the interpreter offers a status line (§11.1):
+    /// bit 4 of Version 3's Flags 1 is set when NO status line is
+    /// available.
+    pub fn status_line(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        set_flag(memory, NO_STATUS_LINE_BIT, !available)
+    }
+
+    /// Claim, or decline to claim, a Tandy machine (§11.1.4):
+    /// Version 3's legendary bit 3.
+    pub fn tandy(memory: &mut Memory, on: bool) -> Result<(), VoxamError> {
+        set_flag(memory, TANDY_BIT, on)
+    }
+
+    /// Record whether the interpreter can split the screen (§11.1),
+    /// in Version 3's Flags 1.
+    pub fn screen_splitting(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        set_flag(memory, SCREEN_SPLIT_BIT, available)
+    }
+
+    /// Record which interpreter is running the story (§11.1.3).
+    pub fn interpreter(memory: &mut Memory, number: u8, revision: u8) -> Result<(), VoxamError> {
+        memory.write_byte(INTERPRETER_NUMBER, number)?;
+        memory.write_byte(INTERPRETER_VERSION, revision)
+    }
+
+    /// Record the screen size in lines and characters (§8.4); 255
+    /// lines means "infinite", the claim of a stream that never
+    /// pages.
+    pub fn screen_size(memory: &mut Memory, lines: u8, columns: u8) -> Result<(), VoxamError> {
+        memory.write_byte(SCREEN_LINES, lines)?;
+        memory.write_byte(SCREEN_COLUMNS, columns)
+    }
+
+    /// Record the typography and timing on offer (§11.1): Version
+    /// 4's Flags 1 capability bits.
+    pub fn presentation(
+        memory: &mut Memory,
+        bold: bool,
+        italic: bool,
+        fixed_pitch: bool,
+        timed_input: bool,
+    ) -> Result<(), VoxamError> {
+        set_flag(memory, BOLD_BIT, bold)?;
+        set_flag(memory, ITALIC_BIT, italic)?;
+        set_flag(memory, FIXED_PITCH_BIT, fixed_pitch)?;
+        set_flag(memory, TIMED_INPUT_BIT, timed_input)
+    }
+
+    /// Clear the game's sound request when it cannot be met
+    /// (§11.1): Flags 2 bit 7 carries a request, not a capability.
+    pub fn sound(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        if available {
+            return Ok(());
+        }
+
+        let low = memory.read_byte(FLAGS_2_LOW)?;
+
+        memory.write_byte(FLAGS_2_LOW, low & !SOUND_BIT)
+    }
+
+    /// Clear the game's font 3 request when it cannot be met
+    /// (§8.1.5.1).
+    pub fn character_graphics(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        if available {
+            return Ok(());
+        }
+
+        let low = memory.read_byte(FLAGS_2_LOW)?;
+
+        memory.write_byte(FLAGS_2_LOW, low & !GRAPHICS_BIT)
+    }
+
+    /// Clear the game's mouse request when it cannot be met
+    /// (§11.1.2).
+    pub fn mouse(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        if available {
+            return Ok(());
+        }
+
+        let low = memory.read_byte(FLAGS_2_LOW)?;
+
+        memory.write_byte(FLAGS_2_LOW, low & !MOUSE_BIT)
+    }
+
+    /// Record the screen's size in units (§8.4.3), from Version 5.
+    pub fn screen_units(memory: &mut Memory, width: u16, height: u16) -> Result<(), VoxamError> {
+        memory.write_word(SCREEN_WIDTH_UNITS, width)?;
+        memory.write_word(SCREEN_HEIGHT_UNITS, height)
+    }
+
+    /// Record the current font's size in screen units (§8.1.1).
+    /// §11's table swaps the two bytes in Version 6.
+    pub fn font_size(memory: &mut Memory, width: u8, height: u8) -> Result<(), VoxamError> {
+        if memory.header().version() == PACKED_PC_VERSION {
+            memory.write_byte(FONT_WIDTH, height)?;
+            memory.write_byte(FONT_HEIGHT, width)
+        } else {
+            memory.write_byte(FONT_WIDTH, width)?;
+            memory.write_byte(FONT_HEIGHT, height)
+        }
+    }
+
+    /// Record the colour offer and the default colours (§8.3.2,
+    /// §8.3.3), from Version 5.
+    pub fn colours(
+        memory: &mut Memory,
+        available: bool,
+        foreground: u8,
+        background: u8,
+    ) -> Result<(), VoxamError> {
+        set_flag(memory, COLOURS_BIT, available)?;
+        memory.write_byte(DEFAULT_BACKGROUND_ADDRESS, background)?;
+        memory.write_byte(DEFAULT_FOREGROUND_ADDRESS, foreground)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

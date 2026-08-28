@@ -9,4 +9,5 @@
 
 pub mod errors;
 pub mod format;
+pub mod frontend;
 pub mod zmachine;
