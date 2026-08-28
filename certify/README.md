@@ -1,0 +1,21 @@
+# Certify
+
+The sweeps that judge this port against the Python reference
+implementation. Each script renders the same request under both
+implementations and diffs the results; the exit code speaks
+RegTest's contract -- 0 for identical, 1 for parted, 2 for a sweep
+that can't run -- so continuous integration can gate on it.
+
+The reference checkout is found at `../voxam` beside this
+repository, or wherever `VOXAM_REFERENCE` points. Running the
+reference needs [uv](https://docs.astral.sh/uv/), exactly as
+developing it does.
+
+| Sweep | What it certifies |
+| --- | --- |
+| `header-diff.sh` | `--header` reports over every Z-code story in `entharion/` |
+
+The deeper certifications -- seeded recordings replaying
+identically, glulxercise, the Å-machine batteries -- ride the
+acceptance and regtest machinery as milestones reach them; these
+sweeps cover the reports those machineries do not.
