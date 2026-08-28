@@ -1,12 +1,8 @@
 #!/bin/sh
-# The abbreviation parity sweep: decode every abbreviation entry of
-# every Z-code story under both implementations and diff them.
+# The dictionary parity sweep: decode every dictionary entry of
+# every Z-code story, with sampled round-trip lookups, under both
+# implementations and diff them.
 #
-# Abbreviations exercise the whole of the text decoder -- alphabet
-# rows, shifts, escapes, the version rules -- over real story data.
-# Both sides print each entry as space-separated hexadecimal text
-# units, which sidesteps the languages' string-escaping differences
-# and compares the decoded text before any surrogate fusing.
 #
 # Usage and contract as header-diff.sh: 0 identical, 1 parted, 2
 # unusable; VOXAM_REFERENCE names the reference checkout.
@@ -22,13 +18,13 @@ if [ ! -f "$reference/pyproject.toml" ]; then
     exit 2
 fi
 
-if ! cargo build --quiet --example abbreviations --manifest-path "$root/Cargo.toml"; then
+if ! cargo build --quiet --example dictionary --manifest-path "$root/Cargo.toml"; then
     echo "certify: the port does not build" >&2
     exit 2
 fi
 
-ported="$root/target/debug/examples/abbreviations"
-oracle="$root/certify/abbreviations_reference.py"
+ported="$root/target/debug/examples/dictionary"
+oracle="$root/certify/dictionary_reference.py"
 
 if [ $# -gt 0 ]; then
     stories="$*"
@@ -68,7 +64,7 @@ for story in $stories; do
 done
 
 if [ "$parted" -eq 0 ]; then
-    echo "certify: $total stories, every abbreviation identical"
+    echo "certify: $total stories, every dictionary identical"
     exit 0
 fi
 
