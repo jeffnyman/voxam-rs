@@ -1,6 +1,7 @@
 //! The Z-Machine: Infocom's 1979 virtual machine, implemented to
 //! the Z-Machine Standard 1.1.
 
+pub mod dictionary;
 pub mod header;
 pub mod memory;
 pub mod rng;
