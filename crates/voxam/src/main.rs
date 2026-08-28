@@ -1,15 +1,19 @@
-//! The `voxam` command. Two faces so far: point it at a story
-//! file and it names the format by the file's own magic, or ask
-//! for `--header` and it reads a Z-Machine story's manifest
-//! (§11.1) and reports it, rendered identically to the Python
-//! implementation.
+//! The `voxam` command. Three faces so far: point it at a
+//! Z-Machine story and it plays on the plain stream; ask for
+//! `--header` and it reads the story's manifest (§11.1); any
+//! other format is named by its magic.
 
+mod accept;
 mod glance;
 
+use std::io::BufRead;
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
 use voxam_core::format::{StoryFormat, sniff};
+use voxam_core::frontend::PlainFrontend;
+use voxam_core::zmachine::machine::{Identity, Machine, RunState};
 use voxam_core::zmachine::story::Story;
 
 /// The exit codes the Python CLI speaks: 0 for a served request,
@@ -22,9 +26,198 @@ fn main() -> ExitCode {
 
     match arguments.as_slice() {
         [flag, story] if flag == "--header" => header_report(story),
-        [story] if story != "--header" => name_format(story),
+        [flag, script] if flag == "--accept" => accepted_session(script),
+        [story] if !story.starts_with("--") => play(story, None),
+        [seed_flag, seed, story] if seed_flag == "--seed" => match seed.parse::<u32>() {
+            Ok(seed) => play(story, Some(seed)),
+            Err(_) => {
+                eprintln!("voxam: --seed takes a number, not {seed:?}");
+                ExitCode::from(EXIT_UNUSABLE)
+            }
+        },
         _ => {
-            eprintln!("usage: voxam [--header] <story-file>");
+            eprintln!("usage: voxam [--header] [--accept script] [--seed N] <story-file>");
+            ExitCode::from(EXIT_UNUSABLE)
+        }
+    }
+}
+
+/// Replay an acceptance script: the recorded commands type
+/// themselves, each echoed through the stream, and the session
+/// ends when they run out, as at end of input.
+fn accepted_session(script_path: &str) -> ExitCode {
+    println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
+
+    let script = match accept::AcceptanceScript::parse(Path::new(script_path)) {
+        Ok(script) => script,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    let bytes = match std::fs::read(&script.game) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    let session = Story::new(bytes).and_then(|story| {
+        let header = story.header();
+
+        println!(
+            "Running {}: release {}, serial {} (z{})\n",
+            script
+                .game
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
+            header.release(),
+            header.serial_number(),
+            header.version()
+        );
+
+        // The refusal watch reads the replayed conversation: the
+        // response to a command is everything the story prints
+        // before the next command is typed.
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let mut machine = Machine::new(
+            story,
+            Box::new(WatchedStream { seen: seen.clone() }),
+            script.seed,
+            Identity::default(),
+        )?;
+        let mut commands = script.commands.iter();
+        let mut awaiting: Option<&(String, usize)> = None;
+
+        let judge = |awaiting: &Option<&(String, usize)>| {
+            if let Some((command, line)) = awaiting
+                && let Some(offense) = accept::refusal_in(&seen.borrow())
+            {
+                println!(
+                    "voxam: line {line}: {} looks refused: {}",
+                    accept::shown(command),
+                    offense.trim()
+                );
+            }
+
+            seen.borrow_mut().clear();
+        };
+
+        loop {
+            match machine.run()? {
+                RunState::Halted => {
+                    judge(&awaiting);
+                    println!();
+                    return Ok(true);
+                }
+                RunState::Waiting => match commands.next() {
+                    Some(entry) => {
+                        judge(&awaiting);
+                        awaiting = Some(entry);
+
+                        // The replay's echo: the transcript shows
+                        // what was entered at each prompt, since no
+                        // fingers ever typed it there.
+                        println!("{}", entry.0);
+                        let _ = std::io::stdout().flush();
+                        machine.deliver_line(&entry.0, 0)?;
+                    }
+                    None => {
+                        judge(&awaiting);
+                        return Ok(false);
+                    }
+                },
+            }
+        }
+    });
+
+    match session {
+        Ok(halted) => {
+            if !halted {
+                println!("\nvoxam: end of input");
+            }
+
+            ExitCode::from(EXIT_OK)
+        }
+        Err(error) => {
+            println!("\nvoxam: {error}");
+            ExitCode::from(EXIT_UNUSABLE)
+        }
+    }
+}
+
+/// Play a Z-Machine story on the plain stream: text flows out,
+/// lines flow in, and end of input ends the session.
+fn play(path: &str, seed: Option<u32>) -> ExitCode {
+    println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
+
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    match sniff(&bytes) {
+        Some(StoryFormat::ZCode { .. }) => {}
+        Some(other) => {
+            let name = match other {
+                StoryFormat::Glulx => "Glulx",
+                StoryFormat::Blorb => "a Blorb resource file",
+                StoryFormat::AaMachine => "an \u{c5}-machine story",
+                StoryFormat::ZCode { .. } => unreachable!(),
+            };
+            println!(
+                "voxam: only Z-Machine stories play yet, and {} is {name}",
+                basename(path)
+            );
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        None => {
+            println!(
+                "voxam: {} is not a story file Voxam recognizes",
+                basename(path)
+            );
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    }
+
+    let session = Story::new(bytes)
+        .and_then(|story| Machine::new(story, Box::new(PlainFrontend), seed, Identity::default()))
+        .and_then(|mut machine| {
+            let stdin = std::io::stdin();
+            let mut lines = stdin.lock().lines();
+
+            loop {
+                match machine.run()? {
+                    RunState::Halted => {
+                        println!();
+                        return Ok(());
+                    }
+                    RunState::Waiting => match lines.next() {
+                        Some(Ok(line)) => machine.deliver_line(&line, 0)?,
+                        // End of input ends the session, as the
+                        // acceptance contract asks.
+                        _ => {
+                            println!(
+                                "
+voxam: end of input"
+                            );
+                            return Ok(());
+                        }
+                    },
+                }
+            }
+        });
+
+    match session {
+        Ok(()) => ExitCode::from(EXIT_OK),
+        Err(error) => {
+            println!("voxam: {error}");
             ExitCode::from(EXIT_UNUSABLE)
         }
     }
@@ -80,31 +273,20 @@ fn header_report(path: &str) -> ExitCode {
     ExitCode::from(EXIT_OK)
 }
 
-/// The default face for now: name a story file's format.
-fn name_format(path: &str) -> ExitCode {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            eprintln!("voxam: {path}: {error}");
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
-    };
-
-    match sniff(&bytes) {
-        Some(StoryFormat::ZCode { version }) => println!("Z-code, version {version}"),
-        Some(StoryFormat::Glulx) => println!("Glulx"),
-        Some(StoryFormat::Blorb) => println!("Blorb resource file"),
-        Some(StoryFormat::AaMachine) => println!("\u{c5}-machine story"),
-        None => {
-            eprintln!("voxam: {path}: not a story file Voxam recognizes");
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
-    }
-
-    ExitCode::from(EXIT_OK)
+/// The plain stream with the refusal watch's ear: everything
+/// prints onward and is kept for judging the response.
+struct WatchedStream {
+    seen: std::rc::Rc<std::cell::RefCell<String>>,
 }
 
-/// The file's own name, as the Python CLI prints it.
+impl voxam_core::frontend::Frontend for WatchedStream {
+    fn write(&mut self, text: &str) {
+        print!("{text}");
+        let _ = std::io::stdout().flush();
+        self.seen.borrow_mut().push_str(text);
+    }
+}
+
 fn basename(path: &str) -> String {
     Path::new(path)
         .file_name()
