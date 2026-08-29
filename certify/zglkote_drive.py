@@ -8,7 +8,9 @@ ask from the script: a line read takes the next command, a
 keystroke read spends the next command one character at a time, a
 file ask gets a slot in the given directory, and a click marker
 lands on the grid at its recorded cell. Timers are never fired, so
-the drive stays deterministic.
+the drive stays deterministic. A script that is not an .accept
+recording reads as plain input lines, verbatim -- the Å-machine
+fixtures' own .in scripts.
 
 The policy needs no fidelity to the blocking replay's own key
 accounting: both implementations are driven with the same stream,
@@ -41,7 +43,14 @@ def main() -> int:
     if extras[:1] == ["--cwd"]:
         cwd = extras[1]
 
-    script = AcceptanceScript.parse(recording)
+    if recording.suffix == ".accept":
+        script = AcceptanceScript.parse(recording)
+        told_commands = list(script.commands)
+        told_clicks = list(script.clicks)
+    else:
+        told_commands = recording.read_text(encoding="utf-8").splitlines()
+        told_clicks = []
+
     environment = {**os.environ, "PYTHONUTF8": "1"}
     child = subprocess.Popen(
         sys.argv[dash + 1 :],
@@ -55,8 +64,8 @@ def main() -> int:
 
     assert child.stdin is not None and child.stdout is not None
 
-    commands = list(script.commands)
-    clicks = list(script.clicks)
+    commands = told_commands
+    clicks = told_clicks
     pending: list[str] = []
     generation = 0
     grid = None

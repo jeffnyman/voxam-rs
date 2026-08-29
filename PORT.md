@@ -204,7 +204,9 @@ sweeps prove the outputs identical across all of them.
   and flow calls take the window map, `draw_image` the stream's
   link value, and the sound calls the channel's arena key (a
   snapshot carries no identity) plus the resources where a play
-  can start.
+  can start. The Å-machine's face needed none of it: its machine
+  owns the voice as a public field (`Machine<WireVoice>`), so the
+  face holds no voice at all and takes it as an argument.
 - **One dependency so far**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
   purity rule, as anticipated below.
