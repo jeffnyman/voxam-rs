@@ -19,6 +19,17 @@ developing it does.
 | `objects-diff.sh` | every object of every Z-code story -- relations, attributes, short names, and property lists walked linearly with a 64-entry cap against corrupt tables |
 | `replay-diff.sh` | every acceptance recording, replayed under both implementations -- IDENTICAL byte for byte, FRONTIER when the port halts at a named unbuilt feature with its output a byte prefix of the reference's, PARTED only on real divergence |
 
+Beside the sweeps live the **oracles** -- scripts that run the
+genuine reference implementation to manufacture the golden vectors
+the port's unit tests pin. They are the provenance of those test
+constants, kept rerunnable: a vector generated is never a vector
+guessed.
+
+| Oracle | What it pins |
+| --- | --- |
+| `rng_oracle.py` | the xorshift32 compatibility contract: mixing outputs, raw stream states, and the pinned roll sequences in `rng.rs` |
+| `zscii_oracle.py` | the §3 text battery: decode results across the version rules, encode bytes, error prose, and the surrogate fusing in `zscii.rs` |
+
 The deeper certifications -- seeded recordings replaying
 identically, glulxercise, the Å-machine batteries -- ride the
 acceptance and regtest machinery as milestones reach them; these
