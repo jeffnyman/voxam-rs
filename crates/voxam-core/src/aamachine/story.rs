@@ -252,7 +252,7 @@ impl Story {
 
 /// Bytes as ASCII text, the reference's `decode("ascii",
 /// "replace")`: anything past $7F becomes the replacement mark.
-fn asciied(raw: &[u8]) -> String {
+pub(crate) fn asciied(raw: &[u8]) -> String {
     raw.iter()
         .map(|&byte| {
             if byte < 0x80 {

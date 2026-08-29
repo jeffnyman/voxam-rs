@@ -6,5 +6,6 @@
 //! specification 1.0). The machine arrives by eras, story file
 //! first, exactly as the other two arrived.
 
+pub mod output;
 pub mod story;
 pub mod text;
