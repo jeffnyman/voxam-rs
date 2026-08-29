@@ -288,6 +288,87 @@ pub fn deserialize(machine: &mut Machine, data: &[u8]) -> Result<(), VoxamError>
     machine.stack.restore(&stack)
 }
 
+/// The save opcode's work: the state onto a Glk stream.
+///
+/// A stream that is missing or unwritable fails with 1 rather
+/// than faulting -- the spoken failure is how a game learns to
+/// prompt again (Glulx: Game State).
+pub fn save(machine: &mut Machine, stream: Option<u32>) -> Result<u32, VoxamError> {
+    let writable = match (&machine.bridge, stream) {
+        (Some(bridge), Some(key)) => bridge
+            .library
+            .streams
+            .get(&key)
+            .is_some_and(|held| held.writable),
+        _ => false,
+    };
+
+    if !writable {
+        return Ok(FAILED);
+    }
+
+    let data = serialize(machine)?;
+    let bridge = machine.bridge.as_mut().expect("checked above");
+    let held = bridge
+        .library
+        .streams
+        .get_mut(&stream.expect("checked above"))
+        .expect("checked above");
+
+    for byte in data {
+        held.put_char(&mut machine.memory, u32::from(byte))?;
+    }
+
+    Ok(SUCCEEDED)
+}
+
+/// The restore opcode's work: the state off a Glk stream.
+///
+/// On success the whole machine state -- stack included -- has
+/// been replaced, and the caller pops the call stub that was
+/// saved with it. Failure speaks 1 and changes nothing.
+pub fn restore(machine: &mut Machine, stream: Option<u32>) -> Result<u32, VoxamError> {
+    let readable = match (&machine.bridge, stream) {
+        (Some(bridge), Some(key)) => bridge
+            .library
+            .streams
+            .get(&key)
+            .is_some_and(|held| held.readable),
+        _ => false,
+    };
+
+    if !readable {
+        return Ok(FAILED);
+    }
+
+    let mut data = Vec::new();
+
+    {
+        let bridge = machine.bridge.as_mut().expect("checked above");
+        let held = bridge
+            .library
+            .streams
+            .get_mut(&stream.expect("checked above"))
+            .expect("checked above");
+
+        loop {
+            let value = held.get_char(&machine.memory)?;
+
+            if value < 0 {
+                break;
+            }
+
+            data.push(value as u8);
+        }
+    }
+
+    match deserialize(machine, &data) {
+        Ok(()) => Ok(SUCCEEDED),
+        Err(VoxamError::GlulxSave(_)) => Ok(FAILED),
+        Err(error) => Err(error),
+    }
+}
+
 /// The saveundo opcode's work: the state into the undo chain.
 ///
 /// The chain keeps the newest handful of states; saving past the

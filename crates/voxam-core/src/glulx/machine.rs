@@ -26,11 +26,15 @@
 
 use crate::errors::VoxamError;
 use crate::glulx::accel::{AVAILABLE, Accelerator};
+use crate::glulx::bridge::{Bridge, Performed};
 use crate::glulx::floats::{
     close, decode_double, decode_float, encode_double, encode_float, modulo, pow, to_int,
 };
 use crate::glulx::funcs;
 use crate::glulx::gestalt::{self, Capabilities};
+use crate::glulx::glk::api::Glk;
+use crate::glulx::glk::dispatch::CLASS_STREAM;
+use crate::glulx::glk::objects::Event;
 use crate::glulx::heap::Heap;
 use crate::glulx::memory::Memory;
 use crate::glulx::opcodes::{name, op};
@@ -170,6 +174,16 @@ fn resumes_a_string(desttype: u32) -> bool {
     )
 }
 
+/// What one instruction did: ran to completion, or completed and
+/// left the machine standing down for its host -- the reference's
+/// MachineSuspended exception, spoken as a value per the port's
+/// suspension departure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Ran,
+    Suspended,
+}
+
 /// A Glulx virtual machine, booted and ready to step.
 pub struct Machine {
     story: Story,
@@ -191,7 +205,10 @@ pub struct Machine {
     pub string_table: u32,
     /// The program counter.
     pub pc: u32,
+    /// The Glk seam, or None with no library installed.
+    pub bridge: Option<Bridge>,
     running: bool,
+    suspended: bool,
     // The generator is deliberately not reseeded by restart: it is
     // no part of saved state either (Glulx: The Random Number
     // Generator).
@@ -221,7 +238,9 @@ impl Machine {
             },
             string_table: 0,
             pc: 0,
+            bridge: None,
             running: true,
+            suspended: false,
             random: Randomizer::new(seed),
         };
 
@@ -233,6 +252,78 @@ impl Machine {
     /// Whether execution has not yet been halted by quit.
     pub fn running(&self) -> bool {
         self.running
+    }
+
+    /// Install a Glk library: the bridge stands up and the
+    /// capability flips, so the gestalt answer and the setiosys
+    /// fallback both tell the same truth.
+    pub fn install_glk(&mut self, library: Glk) {
+        self.bridge = Some(Bridge::new(library));
+        self.capabilities.glk = true;
+    }
+
+    /// The installed Glk library, for a host that renders and
+    /// delivers.
+    pub fn glk_mut(&mut self) -> Option<&mut Glk> {
+        self.bridge.as_mut().map(|bridge| &mut bridge.library)
+    }
+
+    /// Whether a select or file prompt stands suspended, waiting
+    /// on the host.
+    pub fn suspended(&self) -> bool {
+        self.bridge.as_ref().is_some_and(Bridge::suspended)
+    }
+
+    /// Complete a suspended select with the event a host
+    /// collected.
+    pub fn deliver_event(&mut self, event: Event) -> Result<(), VoxamError> {
+        let Some(bridge) = self.bridge.as_mut() else {
+            return Err(VoxamError::GlulxGlk(
+                "an event arrived with no Glk library installed".into(),
+            ));
+        };
+
+        bridge.deliver_event(&mut self.memory, &mut self.stack, event)
+    }
+
+    /// Complete a window's line request with text from the host;
+    /// the finished event comes back to hand to deliver_event.
+    pub fn deliver_line(
+        &mut self,
+        window: u32,
+        text: &str,
+        terminator: u32,
+    ) -> Result<Event, VoxamError> {
+        let Some(bridge) = self.bridge.as_mut() else {
+            return Err(VoxamError::GlulxGlk(
+                "a line arrived with no Glk library installed".into(),
+            ));
+        };
+
+        crate::glulx::bridge::plain(bridge.library.deliver_line(
+            &mut self.memory,
+            window,
+            text,
+            terminator,
+        ))
+    }
+
+    /// Complete a suspended file prompt with the player's name.
+    pub fn deliver_file(&mut self, name: Option<&str>) -> Result<(), VoxamError> {
+        let Some(bridge) = self.bridge.as_mut() else {
+            return Err(VoxamError::GlulxGlk(
+                "a file name arrived with no Glk library installed".into(),
+            ));
+        };
+
+        bridge.deliver_file(&mut self.memory, &mut self.stack, name)
+    }
+
+    /// The Glk stream a save or restore names, or None bare.
+    fn saved_stream(&self, ident: u32) -> Option<u32> {
+        self.bridge
+            .as_ref()
+            .and_then(|bridge| bridge.registry.lookup(CLASS_STREAM, ident))
     }
 
     /// Return to the load state and call the start function.
@@ -261,7 +352,13 @@ impl Machine {
     }
 
     /// Fetch, decode, and execute a single instruction.
-    pub fn step(&mut self) -> Result<(), VoxamError> {
+    ///
+    /// Step::Suspended means a select stands waiting for an event
+    /// only the host can deliver, or a file prompt stands
+    /// mid-flight; the instruction is already whole either way.
+    pub fn step(&mut self) -> Result<Step, VoxamError> {
+        self.suspended = false;
+
         let pc = self.pc;
 
         if pc >= self.memory.endmem() {
@@ -285,10 +382,21 @@ impl Machine {
         let (args, pc) = decode_operands(&self.memory, &mut self.stack, pc, &oplist)?;
         self.pc = pc;
 
-        self.execute(opcode, &args)
+        self.execute(opcode, &args)?;
+
+        Ok(if self.suspended {
+            Step::Suspended
+        } else {
+            Step::Ran
+        })
     }
 
     /// Execute until the story quits; the step count comes back.
+    ///
+    /// For a display that suspends, the run also returns when a
+    /// select stands waiting: running stays true, the host
+    /// delivers the event through the library, and calling run
+    /// again continues where the machine stood.
     ///
     /// The limit is a test and debugging guard, not a spec
     /// feature: a runaway loop in a broken story should fail
@@ -305,9 +413,12 @@ impl Machine {
                 )));
             }
 
-            self.step()?;
-
-            steps += 1;
+            match self.step()? {
+                // The suspending instruction completed, so it
+                // counts; the machine stands down where it is.
+                Step::Suspended => return Ok(steps + 1),
+                Step::Ran => steps += 1,
+            }
         }
 
         Ok(steps)
@@ -786,7 +897,7 @@ impl Machine {
                 // same truth the gestalt answer does.
                 let (mut mode, mut rock) = (args[0].value(), args[1].value());
 
-                if mode == io_mode::GLK {
+                if mode == io_mode::GLK && self.bridge.is_none() {
                     (mode, rock) = (io_mode::NULL, 0);
                 }
 
@@ -809,10 +920,55 @@ impl Machine {
             }
             op::GLK => {
                 // The opcode always functions when a library is
-                // installed -- and none is, yet.
-                Err(VoxamError::GlulxGlk(
-                    "the glk opcode needs a Glk library, and none is installed".into(),
-                ))
+                // installed -- Glk being current is not required
+                // (Glulx: Output).
+                if self.bridge.is_none() {
+                    return Err(VoxamError::GlulxGlk(
+                        "the glk opcode needs a Glk library, and none is installed".into(),
+                    ));
+                }
+
+                let call_args =
+                    funcs::pop_arguments(&mut self.stack, args[1].value(), &self.memory, 0)?;
+                let bridge = self.bridge.as_mut().unwrap();
+                let performed = bridge.perform(
+                    &mut self.memory,
+                    &mut self.stack,
+                    args[0].value(),
+                    &call_args,
+                )?;
+
+                match performed {
+                    Performed::Value(value) => self.store(args[2].target(), value),
+                    Performed::Suspended(value) => {
+                        // A select's opcode is already whole --
+                        // arguments popped, zero stored, the pc
+                        // beyond it -- and only its event is owed.
+                        self.store(args[2].target(), value)?;
+                        self.suspended = true;
+
+                        Ok(())
+                    }
+                    Performed::Prompted => {
+                        // The call itself stands mid-flight: the
+                        // store is owed to the player's answer.
+                        self.bridge
+                            .as_mut()
+                            .unwrap()
+                            .park_prompt_store(args[2].target());
+                        self.suspended = true;
+
+                        Ok(())
+                    }
+                    Performed::Ended => {
+                        // glk_exit, or input no display can ever
+                        // answer: the session ends the way quit
+                        // ends it.
+                        self.running = false;
+
+                        Ok(())
+                    }
+                }
             }
             op::DEBUGTRAP => {
                 // Halt loudly: this interpreter has no debugger to
@@ -892,20 +1048,34 @@ impl Machine {
             op::RESTART => self.restart(),
             op::SAVE => {
                 // The call stub is pushed first, so it lands
-                // inside the save's own stack chunk; with no Glk
-                // stream to write to, the spoken result is the
-                // failure (Glulx: Game State).
+                // inside the save's own stack chunk; popping it
+                // stores the spoken result and, after a later
+                // restore, the same stub stores -1 and execution
+                // continues from this very instruction (Glulx:
+                // Contents of the Stack).
                 let target = args[1].target();
 
                 self.stack
                     .push_stub(target.desttype, target.addr, self.pc)?;
 
-                self.pop_stub(serial::FAILED)
+                let stream = self.saved_stream(args[0].value());
+                let result = serial::save(self, stream)?;
+
+                self.pop_stub(result)
             }
             op::RESTORE => {
-                // With no Glk stream to read from, failure speaks
-                // 1 in place.
-                self.store(args[1].target(), serial::FAILED)
+                // On success the restored stack's own stub pops
+                // with -1 -- "you have just been restored" -- and
+                // this instruction never stores at all; failure
+                // speaks 1 in place.
+                let stream = self.saved_stream(args[0].value());
+                let result = serial::restore(self, stream)?;
+
+                if result == serial::SUCCEEDED {
+                    self.pop_stub(RESTORED)
+                } else {
+                    self.store(args[1].target(), result)
+                }
             }
             op::SAVEUNDO => {
                 // The stub lands inside the saved stack, so that
@@ -1492,7 +1662,7 @@ mod tests {
 
     /// Write one instruction into RAM and step the machine over
     /// it.
-    fn planted(machine: &mut Machine, code: &[u8]) -> Result<(), VoxamError> {
+    fn planted(machine: &mut Machine, code: &[u8]) -> Result<Step, VoxamError> {
         machine.memory.write_run(PLANT, code).unwrap();
         machine.pc = PLANT;
 

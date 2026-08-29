@@ -20,6 +20,10 @@
 
 use crate::errors::VoxamError;
 use crate::glulx::funcs;
+
+/// One past the last character glk_put_char can carry whole; wider
+/// characters go through the Unicode call instead (Glk: Output).
+const GLK_BYTE_LIMIT: u32 = 0x100;
 use crate::glulx::machine::{Machine, io_mode};
 use crate::glulx::stack::{CallStub, dest_type};
 
@@ -170,13 +174,25 @@ pub fn resume(machine: &mut Machine, stub: CallStub) -> Result<(), VoxamError> {
 
 /// Emit one character through the machine's Glk library.
 ///
-/// No library is installed in this port yet -- setiosys falls back
-/// to the null system, so only forcing the mode can arrange this
-/// call.
-fn put_glk(_machine: &mut Machine, _character: u32) -> Result<(), VoxamError> {
-    Err(VoxamError::GlulxGlk(
-        "Glk output selected, but no Glk library is installed".into(),
-    ))
+/// The byte-sized put carries anything below 0x100; above that the
+/// character needs the Unicode call, or a byte stream would
+/// flatten it to '?' on the way through (Glk: Output). Setiosys
+/// falls back to the null system without a library, so only
+/// forcing the mode can arrange the refusal.
+fn put_glk(machine: &mut Machine, character: u32) -> Result<(), VoxamError> {
+    let Some(bridge) = machine.bridge.as_mut() else {
+        return Err(VoxamError::GlulxGlk(
+            "Glk output selected, but no Glk library is installed".into(),
+        ));
+    };
+
+    crate::glulx::bridge::plain(if character < GLK_BYTE_LIMIT {
+        bridge.library.glk_put_char(&mut machine.memory, character)
+    } else {
+        bridge
+            .library
+            .glk_put_char_uni(&mut machine.memory, character)
+    })
 }
 
 /// One streamstr in progress.
