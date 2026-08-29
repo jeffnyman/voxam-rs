@@ -25,3 +25,4 @@ pub mod dispatch;
 pub mod frontend;
 pub mod objects;
 pub mod resources;
+pub mod stdio;

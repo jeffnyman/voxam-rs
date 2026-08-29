@@ -13,6 +13,11 @@ use std::process::ExitCode;
 
 use voxam_core::format::{StoryFormat, sniff};
 use voxam_core::frontend::plain;
+use voxam_core::glulx::glk::api::Glk;
+use voxam_core::glulx::glk::resources::Resources;
+use voxam_core::glulx::glk::stdio::StdioFrontend;
+use voxam_core::glulx::machine::Machine as GlulxMachine;
+use voxam_core::glulx::story::Story as GlulxStory;
 use voxam_core::zmachine::machine::{Identity, Machine, RunState};
 use voxam_core::zmachine::story::Story;
 
@@ -55,6 +60,15 @@ fn accepted_session(script_path: &str) -> ExitCode {
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
+
+    match load_glulx(&script.game) {
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        Ok(Some((story, blorb))) => return glulx_replay(&script, story, blorb),
+        Ok(None) => {}
+    }
 
     let (loaded, blorb) = match load_story(&script.game) {
         Ok(loaded) => loaded,
@@ -161,6 +175,28 @@ fn accepted_session(script_path: &str) -> ExitCode {
 /// lines flow in, and end of input ends the session.
 fn play(path: &str, seed: Option<u32>) -> ExitCode {
     println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
+
+    match load_glulx(Path::new(path)) {
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        Ok(Some((story, blorb))) => {
+            let stdin = std::io::stdin();
+            let mut lines = stdin.lock().lines();
+
+            return glulx_session(
+                &basename(path),
+                story,
+                blorb,
+                seed,
+                Box::new(move || lines.next().and_then(Result::ok)),
+                None,
+                || {},
+            );
+        }
+        Ok(None) => {}
+    }
 
     let (loaded, blorb) = match load_story(Path::new(path)) {
         Ok(loaded) => loaded,
@@ -295,6 +331,196 @@ fn watched_stream(
         let _ = std::io::stdout().flush();
         seen.borrow_mut().push_str(text);
     })
+}
+
+/// Load a story as Glulx if that is what it is: a bare Glulx file
+/// (with any like-named Blorb sidecar), or a Blorb packaging a
+/// Glulx story. Ok(None) means the path is not Glulx at all and
+/// the Z-Machine loader should have it.
+fn load_glulx(
+    path: &Path,
+) -> Result<Option<(GlulxStory, Option<voxam_core::blorb::Blorb>)>, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+
+    let suffix = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase());
+
+    if let Some(suffix) = &suffix
+        && BLORB_SUFFIXES.contains(&suffix.as_str())
+    {
+        let blorb = voxam_core::blorb::Blorb::parse(&bytes).map_err(|error| error.to_string())?;
+
+        let Some(packaged) = blorb.glulx() else {
+            return Ok(None);
+        };
+
+        let story = GlulxStory::new(packaged.to_vec()).map_err(|error| error.to_string())?;
+
+        return Ok(Some((story, Some(blorb))));
+    }
+
+    if !matches!(sniff(&bytes), Some(StoryFormat::Glulx)) {
+        return Ok(None);
+    }
+
+    let story = GlulxStory::new(bytes).map_err(|error| error.to_string())?;
+
+    for sidecar_suffix in BLORB_SUFFIXES {
+        let sidecar = path.with_extension(sidecar_suffix);
+
+        if sidecar.exists() {
+            let bytes = std::fs::read(&sidecar).map_err(|error| error.to_string())?;
+            let blorb =
+                voxam_core::blorb::Blorb::parse(&bytes).map_err(|error| error.to_string())?;
+
+            return Ok(Some((story, Some(blorb))));
+        }
+    }
+
+    Ok(Some((story, None)))
+}
+
+/// Run a Glulx story over the stdio display: the banner, the
+/// session, a final flush for whatever quit left unshown, and the
+/// closing blank line -- the reference CLI's exact shape.
+fn glulx_session(
+    name: &str,
+    story: GlulxStory,
+    blorb: Option<voxam_core::blorb::Blorb>,
+    seed: Option<u32>,
+    source: Box<dyn FnMut() -> Option<String>>,
+    witness: Option<voxam_core::glulx::glk::stdio::Witness>,
+    finish: impl FnOnce(),
+) -> ExitCode {
+    // The checksum verdict is printed but does not gate the run:
+    // the verify opcode exists so a story can judge itself.
+    let verdict = if story.verify() {
+        "checksum verified"
+    } else {
+        "CHECKSUM MISMATCH"
+    };
+
+    println!("Running {name}: Glulx {}, {verdict}\n", story.version());
+
+    let frontend = StdioFrontend::new(
+        Box::new(|text: &str| {
+            print!("{text}");
+            let _ = std::io::stdout().flush();
+        }),
+        source,
+        witness,
+    );
+    let mut library = Glk::new(Box::new(frontend));
+
+    library.resources = Resources::new(blorb);
+
+    let session = GlulxMachine::new(story, seed).and_then(|mut machine| {
+        machine.install_glk(library);
+        machine.run(None)?;
+
+        // A story that ends with quit rather than glk_exit never
+        // asked for a last flush; whatever its windows still hold
+        // is shown on the way out.
+        if let Some(glk) = machine.glk_mut() {
+            let root = glk.root;
+
+            glk.frontend.flush(&mut glk.windows, root);
+        }
+
+        Ok(())
+    });
+
+    finish();
+
+    match session {
+        Ok(()) => {
+            println!();
+            ExitCode::from(EXIT_OK)
+        }
+        Err(error) => {
+            println!("\nvoxam: {error}");
+            ExitCode::from(EXIT_UNUSABLE)
+        }
+    }
+}
+
+/// Replay an acceptance script on the Glulx machine: the recorded
+/// commands type themselves through the stdio display's own input
+/// seam, the refusal watch listens at its witness seam, and the
+/// session ends quietly when the script runs out.
+fn glulx_replay(
+    script: &accept::AcceptanceScript,
+    story: GlulxStory,
+    blorb: Option<voxam_core::blorb::Blorb>,
+) -> ExitCode {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let awaiting: std::rc::Rc<std::cell::RefCell<Option<(String, usize)>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    let judge: std::rc::Rc<dyn Fn()> = {
+        let seen = seen.clone();
+        let awaiting = awaiting.clone();
+
+        std::rc::Rc::new(move || {
+            if let Some((command, line)) = awaiting.borrow().as_ref()
+                && let Some(offense) = accept::refusal_in(&seen.borrow())
+            {
+                println!(
+                    "voxam: line {line}: {} looks refused: {}",
+                    accept::shown(command),
+                    offense.trim()
+                );
+            }
+
+            seen.borrow_mut().clear();
+        })
+    };
+
+    let source = {
+        let commands = script.commands.clone();
+        let awaiting = awaiting.clone();
+        let judge = judge.clone();
+        let mut position = 0;
+
+        Box::new(move || {
+            // The response to a command is everything the story
+            // printed before the next command is typed; judging
+            // happens here, at the moment of the next ask.
+            judge();
+
+            let entry = commands.get(position)?;
+
+            position += 1;
+            *awaiting.borrow_mut() = Some(entry.clone());
+
+            // The replay's echo: the transcript shows what was
+            // entered at each prompt, since no fingers ever typed
+            // it there.
+            println!("{}", accept::echoed(&entry.0));
+            let _ = std::io::stdout().flush();
+
+            Some(entry.0.clone())
+        })
+    };
+
+    let witness = {
+        let seen = seen.clone();
+
+        Box::new(move |text: &str| {
+            seen.borrow_mut().push_str(text);
+        })
+    };
+
+    glulx_session(
+        &basename(&script.game.to_string_lossy()),
+        story,
+        blorb,
+        script.seed,
+        source,
+        Some(witness),
+        move || judge(),
+    )
 }
 
 /// The suffixes a Blorb wears (Blorb: Introduction).

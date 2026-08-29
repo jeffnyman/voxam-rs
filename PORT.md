@@ -87,8 +87,11 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    byte-identical saves under both implementations, restores
    cross both ways, and the saves travel to dfrotz and back.
    (Babel identities remain, folded into a later milestone.)
-3. **Glulx, plain.** The VM, strings, floats, accel, Glk over the
-   plain stream. *Gate:* glulxercise says "All tests passed."
+3. **Glulx, plain.** ✅ *(2026-08-29)* The VM, strings, floats,
+   accel, Glk over the plain stream. *Gate met:* glulxercise says
+   "All tests passed." — 596k instructions, 70 sections, zero
+   failures — and both Glulx acceptance recordings replay
+   byte-identically, which closes the ledger at 44 of 44.
 4. **Å-machine.** *Gate:* the reference batteries replay
    byte-identical, as they do under Python.
 5. **The wire.** `--glkote` stanzas over stdio, `--web`, the
