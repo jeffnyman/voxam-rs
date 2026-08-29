@@ -72,7 +72,7 @@ pub struct Resource {
 }
 
 /// A parsed resource file: the index made walkable.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Blorb {
     /// Every indexed resource, in index order.
     pub resources: Vec<Resource>,

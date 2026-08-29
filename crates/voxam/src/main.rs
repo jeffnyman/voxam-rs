@@ -6,6 +6,7 @@
 
 mod accept;
 mod glance;
+mod web;
 
 use std::io::BufRead;
 use std::io::Write;
@@ -32,6 +33,13 @@ const EXIT_UNUSABLE: u8 = 2;
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
 
+    if arguments
+        .iter()
+        .any(|held| held == "--glkote" || held == "--web")
+    {
+        return wired(&arguments);
+    }
+
     match arguments.as_slice() {
         [flag, story] if flag == "--header" => header_report(story),
         [flag, script] if flag == "--accept" => accepted_session(script),
@@ -44,10 +52,225 @@ fn main() -> ExitCode {
             }
         },
         _ => {
-            eprintln!("usage: voxam [--header] [--accept script] [--seed N] <story-file>");
+            eprintln!(
+                "usage: voxam [--header] [--accept script] [--seed N] [--glkote] \
+                 [--web [--port N]] <story-file>"
+            );
             ExitCode::from(EXIT_UNUSABLE)
         }
     }
+}
+
+/// The default port `--web` listens on.
+const WEB_PORT: u16 = 8080;
+
+/// Serve one story over the wire: `--glkote` on stdio, or `--web`
+/// over HTTP with the vendored GlkOte display.
+fn wired(arguments: &[String]) -> ExitCode {
+    let mut glkote = false;
+    let mut web = false;
+    let mut port: u16 = WEB_PORT;
+    let mut port_given = false;
+    let mut seed: Option<u32> = None;
+    let mut story: Option<String> = None;
+    let mut walker = arguments.iter();
+
+    while let Some(held) = walker.next() {
+        match held.as_str() {
+            "--glkote" => glkote = true,
+            "--web" => web = true,
+            "--port" => {
+                port_given = true;
+
+                let Some(value) = walker.next().and_then(|told| told.parse().ok()) else {
+                    eprintln!("voxam: --port takes a number");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                };
+
+                port = value;
+            }
+            "--seed" => {
+                let Some(value) = walker.next().and_then(|told| told.parse().ok()) else {
+                    eprintln!("voxam: --seed takes a number");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                };
+
+                seed = Some(value);
+            }
+            told if !told.starts_with("--") && story.is_none() => {
+                story = Some(told.to_string());
+            }
+            told => {
+                eprintln!("voxam: {told} does not belong to --glkote or --web");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+        }
+    }
+
+    if glkote && web {
+        eprintln!("voxam: --glkote and --web are two different faces; choose one");
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
+
+    if port_given && !web {
+        eprintln!("voxam: --port belongs to --web");
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
+
+    let Some(story) = story else {
+        eprintln!("usage: voxam [--seed N] --glkote <story-file>, or --web [--port N]");
+        return ExitCode::from(EXIT_UNUSABLE);
+    };
+
+    if glkote {
+        serve_glkote(&story, seed)
+    } else {
+        serve_webbed(&story, seed, port)
+    }
+}
+
+/// Speak the GlkOte protocol for one story on stdin and stdout.
+///
+/// Nothing else may print there -- no banner, no verdict -- so the
+/// display's own error stanza is the only voice a failure has.
+fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
+    let path = Path::new(path);
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+    let mut reader = std::io::BufReader::new(std::io::stdin());
+    let mut writer = std::io::stdout();
+
+    let clean = match sniff(&bytes) {
+        Some(StoryFormat::Glulx) => {
+            let Ok(Some((loaded, blorb))) = load_glulx(path) else {
+                eprintln!("voxam: {} holds no playable Glulx story", path.display());
+                return ExitCode::from(EXIT_UNUSABLE);
+            };
+
+            match voxam_core::glulx::glk::glkote::opened(loaded, blorb, seed) {
+                Ok((mut machine, face)) => voxam_core::glulx::glk::glkote::serve(
+                    &mut machine,
+                    &face,
+                    &mut reader,
+                    &mut writer,
+                ),
+                Err(error) => {
+                    eprintln!("voxam: {error}");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                }
+            }
+        }
+        Some(StoryFormat::AaMachine) => match AAMachineStory::new(&bytes) {
+            Ok(loaded) => {
+                voxam_core::aamachine::glkote::serve(loaded, &mut reader, &mut writer, seed)
+            }
+            Err(error) => {
+                eprintln!("voxam: {error}");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+        },
+        _ => {
+            let (loaded, blorb) = match load_story(path) {
+                Ok(held) => held,
+                Err(error) => {
+                    eprintln!("voxam: {error}");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                }
+            };
+            let resources = voxam_core::glulx::glk::resources::Resources::new(blorb);
+            let frontend =
+                match voxam_core::zmachine::glkote::fronted(loaded.version(), Some(resources)) {
+                    Ok(frontend) => frontend,
+                    Err(error) => {
+                        eprintln!("voxam: {error}");
+                        return ExitCode::from(EXIT_UNUSABLE);
+                    }
+                };
+
+            voxam_core::zmachine::glkote::serve(loaded, frontend, &mut reader, &mut writer, seed)
+        }
+    };
+
+    ExitCode::from(if clean { EXIT_OK } else { EXIT_UNUSABLE })
+}
+
+/// Serve one story to the browser, under its own name.
+fn serve_webbed(path: &str, seed: Option<u32>, port: u16) -> ExitCode {
+    let path = Path::new(path);
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    let session = match sniff(&bytes) {
+        Some(StoryFormat::Glulx) => {
+            let Ok(Some((loaded, blorb))) = load_glulx(path) else {
+                eprintln!("voxam: {} holds no playable Glulx story", path.display());
+                return ExitCode::from(EXIT_UNUSABLE);
+            };
+            let caption = titled(&blorb);
+
+            (web::Session::glulx(loaded, blorb, seed), caption)
+        }
+        Some(StoryFormat::AaMachine) => match AAMachineStory::new(&bytes) {
+            Ok(loaded) => (web::Session::aamachine(loaded, None, seed), None),
+            Err(error) => {
+                eprintln!("voxam: {error}");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+        },
+        _ => {
+            let (loaded, blorb) = match load_story(path) {
+                Ok(held) => held,
+                Err(error) => {
+                    eprintln!("voxam: {error}");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                }
+            };
+            let caption = titled(&blorb);
+
+            (web::Session::z(loaded, blorb, seed), caption)
+        }
+    };
+    let (session, caption) = session;
+    let mut face = web::Face::new(session, caption.as_deref());
+    let listener = match web::webbed(port) {
+        Ok(listener) => listener,
+        Err(error) => {
+            // The port would not bind, most likely: say so plainly.
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    web::serve_web(&mut face, &listener);
+
+    ExitCode::from(EXIT_OK)
+}
+
+/// The caption a session deserves, when the game is known.
+///
+/// A Blorb's iFiction record names its story, and the story plays
+/// under that name: the treaty's first interpreter guideline
+/// (Babel: Guidelines for interpreters and browsers). The
+/// reference also consults the Infocom catalog by IFID, which
+/// waits on the Babel identities milestone; anything unknown is
+/// quietly no caption -- a title bar is a courtesy, never a gate.
+fn titled(blorb: &Option<voxam_core::blorb::Blorb>) -> Option<String> {
+    let record = blorb
+        .as_ref()
+        .and_then(|held| held.ifiction.as_deref())
+        .and_then(voxam_core::babel::ifiction)?;
+
+    record.title.map(|title| format!("{title} — Voxam"))
 }
 
 /// Replay an acceptance script: the recorded commands type

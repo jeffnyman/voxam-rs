@@ -53,11 +53,25 @@ cargo run --release -- --seed 92 stories/zork1.z3
 
 # Replay a recorded acceptance script (Z-Machine and Glulx).
 cargo run --release -- --accept acceptance/zork1-r88-s840726.accept
+
+# Play in the browser: the vendored GlkOte display over HTTP.
+cargo run --release -- --web stories/zork1.z3
+cargo run --release -- --web --port 8931 stories/advent.ulx
+
+# Speak the GlkOte protocol as JSON lines on stdin and stdout --
+# the seam a display shell drives.
+cargo run --release -- --glkote stories/cloak.aastory
 ```
 
-The richer faces -- the GlkOte wire, the browser, the painted
-terminal, the desktop shell -- are later milestones; `PORT.md`
-holds the order they arrive in.
+All three machines speak the wire: `--web` serves the story at
+http://127.0.0.1:8080 with the machine's own tab icon and, when a
+Blorb's iFiction record names it, the story's own title; a page
+reload restarts the game. `--glkote` is the same conversation on
+stdio, one stanza per line, for shells that host the display
+themselves. Version 6 Z-Machine stories wait on the stage face.
+
+Still to come -- the painted terminal and the desktop shell --
+`PORT.md` holds the order they arrive in.
 
 ## Building
 

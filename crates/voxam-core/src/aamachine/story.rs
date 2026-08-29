@@ -60,7 +60,7 @@ fn story_error(message: String) -> VoxamError {
 
 /// The reference's `zlib.crc32`, chained: the standard CRC-32 over
 /// the polynomial IFF's world shares with zlib and PNG.
-pub(crate) fn crc32(data: &[u8], running: u32) -> u32 {
+pub fn crc32(data: &[u8], running: u32) -> u32 {
     let mut crc = !running;
 
     for &byte in data {
@@ -75,7 +75,7 @@ pub(crate) fn crc32(data: &[u8], running: u32) -> u32 {
 }
 
 /// One parsed Å-machine story, its header's claims verified.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Story {
     /// The file format version as (major, minor).
     pub version: (u8, u8),
