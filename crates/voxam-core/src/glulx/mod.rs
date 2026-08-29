@@ -2,7 +2,10 @@
 //! limits, and the target of today's Inform (Glulx 3.1.3).
 
 pub mod floats;
+pub mod funcs;
+pub mod gestalt;
 pub mod memory;
+pub mod opcodes;
 pub mod operand;
 pub mod rng;
 pub mod stack;
