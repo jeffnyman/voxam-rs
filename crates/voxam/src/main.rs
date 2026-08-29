@@ -56,15 +56,15 @@ fn accepted_session(script_path: &str) -> ExitCode {
         }
     };
 
-    let bytes = match std::fs::read(&script.game) {
-        Ok(bytes) => bytes,
+    let (loaded, blorb) = match load_story(&script.game) {
+        Ok(loaded) => loaded,
         Err(error) => {
             println!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
 
-    let session = Story::new(bytes).and_then(|story| {
+    let session = (|story: Story| -> Result<bool, voxam_core::errors::VoxamError> {
         let header = story.header();
 
         println!(
@@ -78,6 +78,8 @@ fn accepted_session(script_path: &str) -> ExitCode {
             header.serial_number(),
             header.version()
         );
+
+        present_resources(&blorb, &story);
 
         // The refusal watch reads the replayed conversation: the
         // response to a command is everything the story prints
@@ -138,7 +140,7 @@ fn accepted_session(script_path: &str) -> ExitCode {
                 },
             }
         }
-    });
+    })(loaded);
 
     match session {
         Ok(halted) => {
@@ -160,40 +162,30 @@ fn accepted_session(script_path: &str) -> ExitCode {
 fn play(path: &str, seed: Option<u32>) -> ExitCode {
     println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
 
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let (loaded, blorb) = match load_story(Path::new(path)) {
+        Ok(loaded) => loaded,
         Err(error) => {
             println!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
 
-    match sniff(&bytes) {
-        Some(StoryFormat::ZCode { .. }) => {}
-        Some(other) => {
-            let name = match other {
-                StoryFormat::Glulx => "Glulx",
-                StoryFormat::Blorb => "a Blorb resource file",
-                StoryFormat::AaMachine => "an \u{c5}-machine story",
-                StoryFormat::ZCode { .. } => unreachable!(),
-            };
-            println!(
-                "voxam: only Z-Machine stories play yet, and {} is {name}",
-                basename(path)
-            );
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
-        None => {
-            println!(
-                "voxam: {} is not a story file Voxam recognizes",
-                basename(path)
-            );
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
+    {
+        let header = loaded.header();
+
+        println!(
+            "Running {}: release {}, serial {} (z{})\n",
+            basename(path),
+            header.release(),
+            header.serial_number(),
+            header.version()
+        );
     }
 
-    let session = Story::new(bytes)
-        .and_then(|story| {
+    present_resources(&blorb, &loaded);
+
+    let session = Ok(loaded)
+        .and_then(|story: Story| {
             let saves = voxam_core::saves::FileSaveSlot {
                 path: Path::new(path).with_extension("sav"),
             };
@@ -268,17 +260,19 @@ fn header_report(path: &str) -> ExitCode {
             );
             return ExitCode::from(EXIT_UNUSABLE);
         }
-        Some(StoryFormat::Blorb) => {
-            println!(
-                "voxam: Blorb-packaged stories await the blorb module; point --header at a bare story"
-            );
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
-        Some(StoryFormat::ZCode { .. }) | None => {}
+        Some(StoryFormat::Blorb) | Some(StoryFormat::ZCode { .. }) | None => {}
     }
 
-    let story = match Story::new(bytes) {
-        Ok(story) => story,
+    if let Some(StoryFormat::Blorb) = sniff(&bytes)
+        && let Ok(blorb) = voxam_core::blorb::Blorb::parse(&bytes)
+        && blorb.glulx().is_some()
+    {
+        println!("voxam: --header reads Z-Machine stories, and {name} is Glulx");
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
+
+    let story = match load_story(Path::new(path)) {
+        Ok((story, _)) => story,
         Err(error) => {
             println!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
@@ -301,6 +295,74 @@ fn watched_stream(
         let _ = std::io::stdout().flush();
         seen.borrow_mut().push_str(text);
     })
+}
+
+/// The suffixes a Blorb wears (Blorb: Introduction).
+const BLORB_SUFFIXES: [&str; 4] = ["blb", "blorb", "zblorb", "gblorb"];
+
+/// Load a story and whatever resources belong to it: a path with
+/// a Blorb suffix must carry a packaged story; any other path
+/// loads as a story file, with a like-named Blorb beside the
+/// story found on its own.
+fn load_story(path: &Path) -> Result<(Story, Option<voxam_core::blorb::Blorb>), String> {
+    let suffix = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase());
+
+    if let Some(suffix) = &suffix
+        && BLORB_SUFFIXES.contains(&suffix.as_str())
+    {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        let blorb = voxam_core::blorb::Blorb::parse(&bytes).map_err(|error| error.to_string())?;
+
+        let Some(packaged) = blorb.story() else {
+            return Err(format!(
+                "{} packages no Z-code story to run",
+                basename(&path.to_string_lossy())
+            ));
+        };
+
+        let story = Story::new(packaged.to_vec()).map_err(|error| error.to_string())?;
+
+        return Ok((story, Some(blorb)));
+    }
+
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let story = Story::new(bytes).map_err(|error| error.to_string())?;
+
+    for sidecar_suffix in BLORB_SUFFIXES {
+        let sidecar = path.with_extension(sidecar_suffix);
+
+        if sidecar.exists() {
+            let bytes = std::fs::read(&sidecar).map_err(|error| error.to_string())?;
+            let blorb =
+                voxam_core::blorb::Blorb::parse(&bytes).map_err(|error| error.to_string())?;
+
+            return Ok((story, Some(blorb)));
+        }
+    }
+
+    Ok((story, None))
+}
+
+/// Announce a Blorb at the banner (Blorb: Game Identifier Chunk):
+/// the census, and a warning that plays on when the resources
+/// name a different story.
+fn present_resources(blorb: &Option<voxam_core::blorb::Blorb>, story: &Story) {
+    if let Some(blorb) = blorb {
+        println!(
+            "Resources: {}
+",
+            blorb.described()
+        );
+
+        if !blorb.matches(story) {
+            println!(
+                "voxam: the resource file names a different story
+"
+            );
+        }
+    }
 }
 
 fn basename(path: &str) -> String {

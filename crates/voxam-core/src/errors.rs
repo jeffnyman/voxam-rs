@@ -8,6 +8,7 @@ use std::fmt;
 /// A rule of one of the machines, enforced with its citation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxamError {
+    Blorb(String),
     Iff(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
@@ -27,7 +28,8 @@ pub enum VoxamError {
 
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (Self::Iff(message)
+        let (Self::Blorb(message)
+        | Self::Iff(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)
         | Self::ZMachineStory(message)

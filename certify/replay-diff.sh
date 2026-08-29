@@ -9,11 +9,9 @@
 # session, so the halt is honest and the machine agreed as far as
 # it went. PARTED: real divergence, which is the only failure.
 #
-# Two dispensations, both documented departures rather than bugs:
+# One dispensation, a documented departure rather than a bug:
 # trailing carriage returns are stripped (the reference's Windows
-# text mode), and the reference's "Resources:" sidecar line -- the
-# blorb census the port has not grown yet -- is filtered with its
-# following blank line, to be retired with the blorb module.
+# text mode).
 #
 # Usage:
 #   certify/replay-diff.sh [recording.accept...]
@@ -74,7 +72,7 @@ for recording in $recordings; do
     name=$(basename "$recording" .accept)
 
     (cd "$reference" && PYTHONUTF8=1 uv run --quiet voxam --plain --accept "$recording") \
-        2>&1 | tr -d '\r' | sed -e '/^Resources: /{N;d;}' >"$reference_out"
+        2>&1 | tr -d '\r' >"$reference_out"
     "$ported" --accept "$recording" 2>&1 | tr -d '\r' >"$ported_out"
 
     if cmp -s "$reference_out" "$ported_out"; then
