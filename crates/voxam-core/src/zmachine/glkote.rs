@@ -556,13 +556,23 @@ impl GlkOteFrontend {
     }
 
     /// The grid's face, cells coalesced into named, inked runs.
+    ///
+    /// The columns read are the model's own where an arrange has
+    /// grown the display past them: the model keeps its boot size
+    /// until a reload boots a machine at the new one (§8.4), so a
+    /// wider measure shows the boot-sized grid rather than reading
+    /// past its edge. (The reference reads the new width and falls
+    /// over the edge -- a latent crash the desktop shell's Measure
+    /// menu found -- so this is the one arrange path with no
+    /// reference behavior to mirror.)
     fn faced(&mut self, rows: usize) -> Vec<Vec<TextRun>> {
         let mut face: Vec<Vec<TextRun>> = Vec::new();
+        let columns = usize::from(self.screen_columns).min(self.model.columns());
 
         for row in 1..=rows {
             let mut spans: Vec<TextRun> = Vec::new();
 
-            for column in 1..=usize::from(self.screen_columns) {
+            for column in 1..=columns {
                 let held = self.model.cell(row, column);
                 let name = named(held.style);
                 let ink = inked(

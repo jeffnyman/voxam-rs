@@ -1,5 +1,8 @@
 # Generated project files
 /target
+/desktop/src-tauri/target
+/desktop/src-tauri/gen
+/desktop/node_modules
 
 # Local environment overrides
 .env

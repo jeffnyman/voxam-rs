@@ -70,8 +70,27 @@ reload restarts the game. `--glkote` is the same conversation on
 stdio, one stanza per line, for shells that host the display
 themselves. Version 6 Z-Machine stories wait on the stage face.
 
-Still to come -- the painted terminal and the desktop shell --
-`PORT.md` holds the order they arrive in.
+## The desktop shell
+
+The Tauri shell lives in `desktop/`: the same GlkOte display in a
+native window, driving `voxam --glkote` underneath. The
+development loop:
+
+```sh
+cargo build --release          # the interpreter the shell finds
+cd desktop
+npm install                    # once, for the tauri CLI
+npm run tauri dev
+```
+
+The shell finds the interpreter beside its own executable first
+(how a packaged install arranges it), then in the workspace's
+`target/`, then on the PATH. A packaged installer bundles the
+interpreter as a sidecar, so a player installs one thing and
+plays.
+
+Still to come -- the painted terminal -- `PORT.md` holds the
+order it arrives in.
 
 ## Building
 

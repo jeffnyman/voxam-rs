@@ -25,6 +25,7 @@ voxam-rs/
 ├── crates/
 │   ├── voxam-core/       the machines and formats; no I/O opinions
 │   └── voxam/            the CLI binary: faces, flags, the wire
+├── desktop/              the Tauri shell: the webview wearing GlkOte
 ├── certify/              the parity sweeps and golden-vector oracles
 └── entharion/            (submodule) specs and story files, as in voxam
 ```
@@ -34,13 +35,21 @@ reads `../voxam/acceptance/` (or `VOXAM_REFERENCE`), because the
 recordings are the contract *between* the implementations and the
 reference keeps custody.
 
+The `desktop/` shell arrived with milestone 5: the reference's
+Tauri shell carried over whole (its own standalone Cargo project,
+kept out of the root workspace so the Tauri tree never rides
+`cargo test --workspace`), with one deliberate change -- the
+interpreter resolves beside the shell's own executable first (the
+bundled arrangement, and the workspace build in development), the
+PATH kept only as a last road. Packaging adds the sidecar bundling
+(tauri.conf.json externalBin) when installers are cut; milestone 7
+swaps the subprocess for in-process linking, the UI untouched.
+
 Planned additions, in the order they're earned:
 
 - `crates/voxam-glass/` — the painted terminal (ratatui), if it
   outgrows the CLI crate.
-- `desktop/` — the Tauri shell, carried over from voxam and taught
-  to link `voxam-core` in-process instead of spawning a subprocess;
-  later, the Tauri 2 mobile targets.
+- the Tauri 2 mobile targets of `desktop/`.
 - a `wasm` target of `voxam-core` married to glkote.js — the
   browser face with no server.
 
