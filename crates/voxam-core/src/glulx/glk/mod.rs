@@ -20,5 +20,8 @@
 //! lazily-minted business, exactly as in the reference, so
 //! transcripts diff identically.
 
+pub mod api;
 pub mod dispatch;
+pub mod frontend;
 pub mod objects;
+pub mod resources;

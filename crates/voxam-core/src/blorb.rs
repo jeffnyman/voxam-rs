@@ -25,7 +25,11 @@ const ENTRY_SIZE: usize = 12;
 /// The §11 usages, and the executable seat's fixed number.
 pub const USAGE_PICTURE: [u8; 4] = *b"Pict";
 pub const USAGE_SOUND: [u8; 4] = *b"Snd ";
+pub const USAGE_DATA: [u8; 4] = *b"Data";
 pub const USAGE_EXEC: [u8; 4] = *b"Exec";
+
+/// The PNG picture chunk type (Blorb: Picture Resource Chunks).
+pub const PNG_ID: [u8; 4] = *b"PNG ";
 const ZCODE_ID: [u8; 4] = *b"ZCOD";
 const GLULX_ID: [u8; 4] = *b"GLUL";
 const EXEC_NUMBER: u32 = 0;
