@@ -4,9 +4,11 @@
 pub mod floats;
 pub mod funcs;
 pub mod gestalt;
+pub mod heap;
 pub mod memory;
 pub mod opcodes;
 pub mod operand;
 pub mod rng;
+pub mod search;
 pub mod stack;
 pub mod story;

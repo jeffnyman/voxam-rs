@@ -12,6 +12,7 @@ pub enum VoxamError {
     GlulxFunction(String),
     GlulxInstruction(String),
     GlulxMemory(String),
+    GlulxSave(String),
     GlulxStack(String),
     GlulxStory(String),
     Iff(String),
@@ -38,6 +39,7 @@ impl fmt::Display for VoxamError {
         | Self::GlulxFunction(message)
         | Self::GlulxInstruction(message)
         | Self::GlulxMemory(message)
+        | Self::GlulxSave(message)
         | Self::GlulxStack(message)
         | Self::GlulxStory(message)
         | Self::Iff(message)
