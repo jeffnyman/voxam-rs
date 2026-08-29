@@ -173,6 +173,18 @@ pub trait Frontend {
         false
     }
 
+    /// The header's row claim under the arc band: how many text
+    /// rows stand below whatever hangs, or None where no band can.
+    ///
+    /// The reference's wire face writes the header itself when the
+    /// band changes; a Rust face cannot reach memory mid-call, so
+    /// the machine asks after every arc op and re-declares -- the
+    /// same bytes, the seam's way around the borrow (arc_image:
+    /// the contract, part A).
+    fn arc_rows_below(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a Version 6 session plays on a §8.8 stage of eight
     /// placeable windows. When true, the machine forwards window
     /// geometry and cursor moves; when false, it keeps the

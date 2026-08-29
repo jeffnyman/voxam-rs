@@ -62,7 +62,7 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `aamachine/` (5.5k lines) | `voxam-core::aamachine` | Mechanical; certified byte-identical against the reference batteries. |
 | `iff.py`, `blorb.py`, `babel.py`, `infocom.py` | `voxam-core::{iff, blorb, babel, …}` | Byte work; IFIDs remain the persistence key for deluxe features. |
 | `zmachine/quetzal.py`, `aamachine/saves.py` | with their machines | Interchange formats; saves must round-trip with other interpreters. |
-| `png.py`, `aiff.py`, `wav.py`, `sixel.py`, `font3.py` | `voxam-core` or drop | `png` crate or a straight port; the hand-rolled decoders exist for zero-dep purity, which crates.io relaxes. Decide per file. |
+| `png.py`, `aiff.py`, `wav.py`, `sixel.py`, `font3.py` | `voxam-core` or drop | Decided for `aiff`/`wav`: straight ports, zero-dep purity kept (the wire's data: urls need them, plus a hand-rolled base64). `png` and the rest: decide per file when their era arrives. |
 | `acceptance.py`, `regtest.py`, `probe.py` | `voxam-core::harness` (or a dev-only crate) | The certification machinery. Ports early — it is how everything else is judged. |
 | `listing.py`, `glance.py`, `decompose.py`, `scribe.py` | `voxam` (CLI) | Inspection tools; `--listing` doubles as a decoder test. |
 | `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
@@ -180,6 +180,19 @@ sweeps prove the outputs identical across all of them.
   Memory` passed to every operation that touches one — the
   state-view departure applied to Glk. Retained arrays survive
   `setmemsize` for the same reason the reference's lazy views do.
+- **The wire face is a shared cell, its machine halves on a
+  Session.** The reference's `zmachine/glkote.py` face holds its
+  machine and pokes it directly — a cycle Rust refuses. The face's
+  state lives behind `Rc<RefCell<…>>`: the machine owns one handle
+  as its `Frontend`, and a `Session` holds the other beside the
+  machine itself, carrying the two halves that need both ends
+  (`render`, `accept`). Two smaller spellings ride along: the
+  timer-restart check compares the machine's new *wait serial*
+  where the reference compares wait identity, and the arc band's
+  header re-base is asked *by the machine* after each arc op
+  (`arc_rows_below` on the trait) where the reference's face
+  writes memory itself — the same bytes, the borrow's way around.
+  The zglkote sweep proves the transcripts identical.
 - **One dependency so far**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
   purity rule, as anticipated below.

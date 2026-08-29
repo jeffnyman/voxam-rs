@@ -210,7 +210,9 @@ pub struct Reading {
     text_buffer: usize,
     parse_buffer: usize,
     counted: bool,
-    capacity: usize,
+    /// How many characters the text buffer can hold (§15 read) --
+    /// the wire's line field carries it as the maxlen.
+    pub capacity: usize,
     preloaded: usize,
     /// The preloaded text a counted buffer carried into the read
     /// (§15 read) -- the half-typed command a display should show
@@ -296,6 +298,7 @@ pub struct Machine {
     redirections: Vec<(usize, Units, Option<usize>)>,
     undo: VecDeque<Snapshot>,
     waiting: Option<Waiting>,
+    wait_serial: u64,
     /// The end-of-sound routine of the sound now playing, and
     /// whether a sound has started since the last keyboard input
     /// -- The Lurking Horror's §9 pacing ledger.
@@ -359,6 +362,7 @@ impl Machine {
             redirections: Vec::new(),
             undo: VecDeque::new(),
             waiting: None,
+            wait_serial: 0,
             pending_keys: VecDeque::new(),
             typist_ready: None,
             sound_routine: 0,
@@ -489,6 +493,11 @@ impl Machine {
     }
 
     /// The working memory image, live as the game mutates it.
+    pub fn memory_mut(&mut self) -> &mut Memory {
+        &mut self.memory
+    }
+
+    /// The machine's addressable memory, for a session's own reads.
     pub fn memory(&self) -> &Memory {
         &self.memory
     }
@@ -504,6 +513,11 @@ impl Machine {
     }
 
     /// The suspended read a host must answer, if any.
+    pub fn wait_serial(&self) -> u64 {
+        self.wait_serial
+    }
+
+    /// What the machine stands waiting for, if anything.
     pub fn waiting(&self) -> Option<&Waiting> {
         self.waiting.as_ref()
     }
@@ -2111,6 +2125,7 @@ impl Machine {
         // through deliver_file -- the same standing-down the reads
         // learned (§15 save).
         if self.frontend.suspends() {
+            self.wait_serial += 1;
             self.waiting = Some(Waiting::File(Filing {
                 purpose: Purpose::Save,
                 instruction: instruction.clone(),
@@ -2161,6 +2176,7 @@ impl Machine {
         // The restore stands down for its file the way the save
         // does; the bytes are still to be found (§15 restore).
         if self.frontend.suspends() {
+            self.wait_serial += 1;
             self.waiting = Some(Waiting::File(Filing {
                 purpose: Purpose::Restore,
                 instruction: instruction.clone(),
@@ -2974,9 +2990,27 @@ impl Machine {
 
         if self.frontend.has_arc_images() && values.len() >= 2 {
             self.frontend.draw_arc_image(values[0], values[1]);
+            self.rebase_rows()?;
         }
 
         self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Re-declare the header's rows from the display's arc claim.
+    ///
+    /// One byte of header, and 255 already means "infinite" there
+    /// (§8.4): the claim stays inside both bounds (arc_image: the
+    /// contract, part A).
+    pub fn rebase_rows(&mut self) -> Result<(), VoxamError> {
+        if let Some(below) = self.frontend.arc_rows_below() {
+            declare::screen_size(
+                &mut self.memory,
+                below.clamp(1, 255) as u8,
+                self.frontend.screen_columns(),
+            )?;
+        }
 
         Ok(())
     }
@@ -3116,6 +3150,7 @@ impl Machine {
         if self.frontend.suspends() {
             let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
 
+            self.wait_serial += 1;
             self.waiting = Some(Waiting::Read(Reading {
                 wants: Wants::Line,
                 instruction: instruction.clone(),
@@ -3144,6 +3179,7 @@ impl Machine {
 
         let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
 
+        self.wait_serial += 1;
         self.waiting = Some(Waiting::Read(Reading {
             wants: Wants::Line,
             instruction: instruction.clone(),
@@ -3193,6 +3229,7 @@ impl Machine {
         if self.frontend.suspends() {
             let paired = time != 0 && routine != 0;
 
+            self.wait_serial += 1;
             self.waiting = Some(Waiting::Read(Reading {
                 wants: Wants::Key,
                 instruction: instruction.clone(),
@@ -3234,6 +3271,7 @@ impl Machine {
             return Ok(Step::Ran);
         }
 
+        self.wait_serial += 1;
         self.waiting = Some(Waiting::Read(Reading {
             wants: Wants::Key,
             instruction: instruction.clone(),

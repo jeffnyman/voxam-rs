@@ -318,7 +318,7 @@ fn write_string(told: &mut String, text: &str) {
 }
 
 fn json_error(message: String) -> VoxamError {
-    VoxamError::GlkOte(message)
+    VoxamError::GlkOteJson(message)
 }
 
 /// Parse one JSON document; trailing content is refused.

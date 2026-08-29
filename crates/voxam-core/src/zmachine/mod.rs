@@ -3,6 +3,7 @@
 
 pub mod dictionary;
 pub mod frames;
+pub mod glkote;
 pub mod header;
 pub mod instruction;
 pub mod machine;
