@@ -213,6 +213,7 @@ pub struct PlainVoice {
     pub(crate) width: i64,
     pub(crate) told: String,
     pub(crate) hidden: bool,
+    saves: bool,
     word: String,
     spaces: i64,
     x: i64,
@@ -228,6 +229,7 @@ impl PlainVoice {
             width: WIDTH,
             told: String::new(),
             hidden: false,
+            saves: false,
             word: String::new(),
             spaces: 0,
             x: 0,
@@ -237,6 +239,15 @@ impl PlainVoice {
         voice.reset();
 
         Ok(voice)
+    }
+
+    /// Declare savefile support without keeping any files -- the
+    /// reference's per-instance has_saves override, for the walks
+    /// whose gold transcripts carry the SAVEFILE feature lines.
+    pub fn keeping(mut self) -> Self {
+        self.saves = true;
+
+        self
     }
 
     /// Choose a width other than the classic 80 columns.
@@ -329,6 +340,10 @@ impl PlainVoice {
 }
 
 impl Voice for PlainVoice {
+    fn has_saves(&self) -> bool {
+        self.saves
+    }
+
     fn say(&mut self, text: &str) {
         if self.hidden {
             return;

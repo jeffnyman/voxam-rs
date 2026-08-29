@@ -21,6 +21,7 @@ developing it does.
 | `glulx-machine-diff.sh` | the bare Glulx machine -- a byte-exact Quetzal save vector, then every checker `.ulx` booted with no Glk library and run to its quit or halt, step counts and halting errors agreeing whole |
 | `glulxercise.sh` | the M3 gate itself: glulxercise run whole under a scripted Glk display, the verdict the story's own -- "All tests passed." |
 | `aastory-diff.sh` | every .aastory fixture the reference keeps -- header claims, bibliography, extended characters, chunk census, and the whole dictionary decoded, agreeing line for line |
+| `aawalk-diff.sh` | the M4 gate: the vendored gold transcripts -- the community fork's own engine at seed 1234 -- replayed under the port's plain voice, byte for byte: the opcode exercise twice over, Miss Gosling's Last Case whole, format 1.0, and the codepoints walk |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors
