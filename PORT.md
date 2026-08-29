@@ -123,6 +123,20 @@ sweeps prove the outputs identical across all of them.
   checker's sake.
 - **Opcode tables are matches with version guards** rather than
   dicts of span tuples; a §14 fork reads as two guarded arms.
+- **Glk objects live in id-keyed arenas.** The reference's object
+  graph — a window holding its parent pair, a stream its window —
+  becomes maps keyed by internal id, with references stored as ids
+  and the tree walks (`rearrange`, `subtree`) taking the map as an
+  argument. Subclass hierarchies become `WindowKind`/`StreamKind`
+  enums. The 32-bit ids Glulx sees stay the bridge's separate,
+  lazily-minted sequence, exactly as in the reference, so
+  transcripts diff identically.
+- **Glk buffers are VM coordinates, not live views.** The
+  reference's Buffer protocol (a list, or a MemArray over VM
+  memory) becomes `MemArray` coordinates with `&Memory`/`&mut
+  Memory` passed to every operation that touches one — the
+  state-view departure applied to Glk. Retained arrays survive
+  `setmemsize` for the same reason the reference's lazy views do.
 - **One dependency so far**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
   purity rule, as anticipated below.

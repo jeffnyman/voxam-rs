@@ -5,6 +5,7 @@ pub mod accel;
 pub mod floats;
 pub mod funcs;
 pub mod gestalt;
+pub mod glk;
 pub mod heap;
 pub mod machine;
 pub mod memory;
