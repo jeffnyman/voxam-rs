@@ -10,6 +10,7 @@ pub mod memory;
 pub mod objects;
 pub mod opcodes;
 pub mod packed;
+pub mod quetzal;
 pub mod riders;
 pub mod rng;
 pub mod routine;

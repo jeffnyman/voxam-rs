@@ -20,6 +20,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::errors::VoxamError;
 use crate::frontend::{Frontend, Status};
+use crate::saves::SaveSlot;
 use crate::zmachine::dictionary::{Dictionary, tokenize};
 use crate::zmachine::frames::CallStack;
 use crate::zmachine::header::{FLAGS_2, declare};
@@ -223,6 +224,7 @@ pub struct Machine {
     rng: Randomizer,
     frontend: Box<dyn Frontend>,
     identity: Identity,
+    saves: Option<Box<dyn SaveSlot>>,
     pc: usize,
     running: bool,
     screen_selected: bool,
@@ -256,6 +258,7 @@ impl Machine {
         frontend: Box<dyn Frontend>,
         seed: Option<u32>,
         identity: Identity,
+        saves: Option<Box<dyn SaveSlot>>,
     ) -> Result<Self, VoxamError> {
         let memory = Memory::new(&story)?;
         let variables = Variables::new(&memory);
@@ -270,6 +273,7 @@ impl Machine {
             rng: Randomizer::new(seed),
             frontend,
             identity,
+            saves,
             pc: 0,
             running: true,
             screen_selected: true,
@@ -1601,7 +1605,22 @@ impl Machine {
             ));
         }
 
-        self.save_rider(instruction, false)
+        // The snapshot's PC is this instruction's own rider -- the
+        // branch data through Version 3, the store byte from 4
+        // (Quetzal §5.8) -- so a restore resumes right there.
+        let snapshot = Snapshot {
+            dynamic_memory: self.memory.dynamic_snapshot(),
+            pc: instruction.operands_end,
+            frames: self.calls.snapshot(),
+        };
+        let data = crate::zmachine::quetzal::write(&snapshot, &self.story)?;
+
+        let success = match &mut self.saves {
+            Some(slot) => slot.write(&data),
+            None => false,
+        };
+
+        self.save_rider(instruction, success)
     }
 
     /// Answer a save the §15 way: a branch through Version 3, a
@@ -1617,9 +1636,13 @@ impl Machine {
         }
     }
 
-    /// Restore a saved state of play (§15 restore): with no slot,
-    /// failure -- no branch through Version 3, a stored 0 from
-    /// Version 4.
+    /// Restore a saved state of play (§15 restore, §6.1.2). On
+    /// success the machine does not continue here at all: the
+    /// restored state resumes at the save's rider (Quetzal §5.8).
+    /// Failure is a result the story hears -- no branch through
+    /// Version 3, a stored 0 from Version 4 -- whether the slot
+    /// was empty, the bytes were not a save, or the save names
+    /// another game.
     fn op_restore(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         if !instruction.operands.is_empty() {
             return Err(unimplemented(
@@ -1628,13 +1651,26 @@ impl Machine {
             ));
         }
 
-        if self.memory.header().version() > BRANCHING_SAVE_FINAL_VERSION {
-            self.store_result(instruction.store_variable, FALSE_VALUE)?;
-        }
+        let data = match &mut self.saves {
+            Some(slot) => slot.read(),
+            None => None,
+        };
 
-        self.pc = instruction.next_address;
+        let snapshot =
+            data.and_then(|bytes| crate::zmachine::quetzal::read(&bytes, &self.story).ok());
 
-        Ok(())
+        let Some(snapshot) = snapshot else {
+            if self.memory.header().version() > BRANCHING_SAVE_FINAL_VERSION {
+                self.store_result(instruction.store_variable, FALSE_VALUE)?;
+            }
+
+            self.pc = instruction.next_address;
+
+            return Ok(());
+        };
+
+        self.restore(&snapshot)?;
+        self.resume_from_save(snapshot.pc)
     }
 
     /// Save the state of play into the interpreter's hand (§15):

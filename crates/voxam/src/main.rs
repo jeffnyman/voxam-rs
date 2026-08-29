@@ -83,11 +83,17 @@ fn accepted_session(script_path: &str) -> ExitCode {
         // response to a command is everything the story prints
         // before the next command is typed.
         let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        // Saved games live beside the story: zork1.z3 saves to
+        // zork1.sav, where every other interpreter can find them.
+        let saves = voxam_core::saves::FileSaveSlot {
+            path: script.game.with_extension("sav"),
+        };
         let mut machine = Machine::new(
             story,
             Box::new(watched_stream(seen.clone())),
             script.seed,
             Identity::default(),
+            Some(Box::new(saves)),
         )?;
         let mut commands = script.commands.iter();
         let mut awaiting: Option<&(String, usize)> = None;
@@ -187,7 +193,19 @@ fn play(path: &str, seed: Option<u32>) -> ExitCode {
     }
 
     let session = Story::new(bytes)
-        .and_then(|story| Machine::new(story, Box::new(plain()), seed, Identity::default()))
+        .and_then(|story| {
+            let saves = voxam_core::saves::FileSaveSlot {
+                path: Path::new(path).with_extension("sav"),
+            };
+
+            Machine::new(
+                story,
+                Box::new(plain()),
+                seed,
+                Identity::default(),
+                Some(Box::new(saves)),
+            )
+        })
         .and_then(|mut machine| {
             let stdin = std::io::stdin();
             let mut lines = stdin.lock().lines();
