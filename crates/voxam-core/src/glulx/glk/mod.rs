@@ -20,4 +20,5 @@
 //! lazily-minted business, exactly as in the reference, so
 //! transcripts diff identically.
 
+pub mod dispatch;
 pub mod objects;
