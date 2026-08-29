@@ -1,10 +1,16 @@
-//! The Treaty of Babel's bibliography: the iFiction record.
+//! The Treaty of Babel: a story's identity and its bibliography.
 //!
-//! This rung carries what the wire's doorway courtesy needs -- the
-//! record's bibliographic heart, read from the Blorb's IFmd chunk
-//! (Babel: The iFiction format). The story identities (IFIDs
-//! computed from the bytes themselves) arrive with the Babel
-//! milestone.
+//! The treaty gives every work of interactive fiction an IFID,
+//! "analogous to the ISBN code assigned to every published book"
+//! (Babel: The IFID unique identifier), and lays down per-format
+//! rules for computing one where none is embedded. This module
+//! carries the rules for the formats Voxam plays -- modern files
+//! brand a UUID://...// string into byte-accessible memory and the
+//! brand wins wherever it is found; legacy files earn their IFIDs
+//! from their header numbers instead, human-readable identities
+//! like ZCODE-88-840726 -- and the iFiction record the wire's
+//! doorway courtesy reads from the Blorb's IFmd chunk (Babel: The
+//! iFiction format).
 //!
 //! The XML walking is done by hand, and deliberately small:
 //! elements matched by local name alone, since the treaty
@@ -12,6 +18,194 @@
 //! so careful, and bibliography is a courtesy that should survive
 //! a missing xmlns. What cannot be read answers None -- never an
 //! error, because a card is never a gate.
+
+// Serial codes that never earn a checksum suffix: the test and
+// user-modified forms the treaty names (Babel: The IFID for a
+// legacy Z-code story file).
+const UNTRUSTED_SERIALS: [&str; 3] = ["000000", "999999", "------"];
+
+// The Z-code header's identifying words (§11.1): release, serial,
+// checksum -- the treaty's three elements.
+const Z_RELEASE: usize = 0x02;
+const Z_SERIAL: std::ops::Range<usize> = 0x12..0x18;
+const Z_CHECKSUM: usize = 0x1C;
+
+// The Glulx header's identifying words (Glulx: The Header), plus
+// the Inform-compiled fields past its end (Babel: The IFID for a
+// legacy Glulx story file).
+const GLULX_EXTENT: std::ops::Range<usize> = 12..16;
+const GLULX_CHECKSUM: std::ops::Range<usize> = 32..36;
+const GLULX_COMPILER: std::ops::Range<usize> = 36..40;
+const GLULX_RELEASE: usize = 52;
+const GLULX_SERIAL: std::ops::Range<usize> = 54..60;
+const INFORM: &[u8] = b"Info";
+
+/// A story too short to hold the identifying header words can hold
+/// no identity either.
+const HEADER_EXTENT: usize = 0x40;
+
+/// The Z-Machine's eight story file versions (§11.1): a plausible
+/// version byte is what marks loose bytes as Z-code.
+const LAST_Z_VERSION: u8 = 8;
+
+/// The IFID for a story file's bytes; None for neither format.
+///
+/// A Glulx file answers by its magic word, an Å-machine form by
+/// its own, anything else with a plausible version byte as Z-code.
+/// The caller unwraps blorbs first: a blorbed story's IFID is its
+/// packaged story's, until an iFiction record says otherwise
+/// (Babel: The IFID for a blorbed story file).
+pub fn ifid(data: &[u8]) -> Option<String> {
+    if data.len() < HEADER_EXTENT {
+        return None;
+    }
+
+    if &data[..4] == b"Glul" {
+        return Some(glulx_ifid(data));
+    }
+
+    if &data[..4] == b"FORM" && &data[8..12] == b"AAVM" {
+        return aamachine_ifid(data);
+    }
+
+    if (1..=LAST_Z_VERSION).contains(&data[0]) {
+        return Some(zcode_ifid(data));
+    }
+
+    None
+}
+
+/// The IFID an Å-machine story carries in its HEAD, or None.
+///
+/// The embedded UUID is the treaty answer for a Dialog story --
+/// the compiler stamps one at build time -- and a story without
+/// the optional field, or one this reader cannot parse, answers
+/// nothing rather than an invented hash (Aa-machine: HEAD).
+pub fn aamachine_ifid(data: &[u8]) -> Option<String> {
+    crate::aamachine::story::Story::new(data)
+        .ok()
+        .and_then(|story| story.ifid)
+}
+
+/// A Z-code story's IFID from its brand or its header.
+///
+/// The serial gates the brand scan: a file whose serial dates it
+/// before 2006 -- the 1980s, the 1990s, 2000 through 2005 --
+/// cannot carry the UUID brand, so "searching for this is
+/// unnecessary" and only the rest are scanned (Babel: The IFID for
+/// a legacy Z-code story file).
+pub fn zcode_ifid(data: &[u8]) -> String {
+    let serial = cleaned(&data[Z_SERIAL]);
+    let dated =
+        serial.starts_with('8') || serial.starts_with('9') || ("00"..="05").contains(&&serial[..2]);
+
+    if !dated && let Some(brand) = branded_scan(data) {
+        return brand;
+    }
+
+    let release = u16::from_be_bytes([data[Z_RELEASE], data[Z_RELEASE + 1]]);
+    let head = format!("ZCODE-{release}-{serial}");
+    let leading = serial.as_bytes()[0];
+
+    if b"012345679".contains(&leading) && !UNTRUSTED_SERIALS.contains(&serial.as_str()) {
+        // The post-1990 form: Inform-era serials carry the
+        // checksum as four hexadecimal digits, while Infocom's 8x
+        // serials -- and the untrusted forms -- stay bare (Babel:
+        // The IFID for a legacy Z-code story file).
+        let checksum = u16::from_be_bytes([data[Z_CHECKSUM], data[Z_CHECKSUM + 1]]);
+
+        return format!("{head}-{checksum:04X}");
+    }
+
+    head
+}
+
+/// A Glulx story's IFID from its brand or its header.
+///
+/// An Inform-compiled file identifies like Z-code -- release,
+/// serial, checksum -- and announces itself with "Info" past the
+/// header proper; a file from any other tool has only its
+/// checksum, supplemented by the stated size of the initial memory
+/// map (Babel: The IFID for a legacy Glulx story file).
+pub fn glulx_ifid(data: &[u8]) -> String {
+    if let Some(brand) = branded_scan(data) {
+        return brand;
+    }
+
+    let checksum = u32::from_be_bytes(data[GLULX_CHECKSUM].try_into().expect("four bytes"));
+
+    if &data[GLULX_COMPILER] == INFORM {
+        let release = u16::from_be_bytes([data[GLULX_RELEASE], data[GLULX_RELEASE + 1]]);
+        let serial = cleaned(&data[GLULX_SERIAL]);
+
+        return format!("GLULX-{release}-{serial}-{checksum:08X}");
+    }
+
+    let extent = u32::from_be_bytes(data[GLULX_EXTENT].try_into().expect("four bytes"));
+
+    format!("GLULX-{extent:08X}-{checksum:08X}")
+}
+
+/// The embedded UUID://...// brand, uppercased, or None.
+///
+/// "Its location cannot be guaranteed, so the whole of
+/// byte-accessible memory must be scanned" (Babel: Game formats
+/// that embed an IFID) -- and the file is the practical superset
+/// of byte-accessible memory. The treaty spells an IFID with
+/// digits, capitals, and hyphens, but Alan writes lowercase
+/// hexadecimal, "converted to upper case when reading" -- so the
+/// scan accepts both cases and the answer wears capitals.
+fn branded_scan(data: &[u8]) -> Option<String> {
+    const OPENING: &[u8] = b"UUID://";
+
+    let mut from = 0;
+
+    while let Some(at) = find(&data[from..], OPENING).map(|found| from + found) {
+        let start = at + OPENING.len();
+        let end = data[start..]
+            .iter()
+            .position(|&byte| !(byte.is_ascii_alphanumeric() || byte == b'-'))
+            .map_or(data.len(), |run| start + run);
+
+        if end > start && data[end..].starts_with(b"//") {
+            let told: String = data[start..end]
+                .iter()
+                .map(|&byte| (byte as char).to_ascii_uppercase())
+                .collect();
+
+            return Some(told);
+        }
+
+        from = start;
+    }
+
+    None
+}
+
+/// The first offset a needle appears at, or None.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Serial bytes as text, non-alphanumerics turned to hyphens.
+///
+/// Only ASCII alphanumerics survive: "converting any
+/// non-alphanumeric characters (in particular, nulls) to hyphens"
+/// (Babel: The IFID for a legacy Z-code story file).
+fn cleaned(serial: &[u8]) -> String {
+    serial
+        .iter()
+        .map(|&byte| {
+            if byte.is_ascii_alphanumeric() {
+                byte as char
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
 
 /// The bibliographic heart of an iFiction record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -433,6 +627,153 @@ mod tests {
 
         assert!(blank.title.is_none());
         assert!(blank.ifid.is_none());
+    }
+
+    fn z_header(release: u16, serial: &[u8; 6], checksum: u16, version: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 0x40];
+
+        data[0] = version;
+        data[0x02..0x04].copy_from_slice(&release.to_be_bytes());
+        data[0x12..0x18].copy_from_slice(serial);
+        data[0x1C..0x1E].copy_from_slice(&checksum.to_be_bytes());
+
+        data
+    }
+
+    fn glulx_image(
+        checksum: u32,
+        compiler: &[u8; 4],
+        release: u16,
+        serial: &[u8; 6],
+        extent: u32,
+        tail: &[u8],
+    ) -> Vec<u8> {
+        let mut data = vec![0u8; 0x40];
+
+        data[0..4].copy_from_slice(b"Glul");
+        data[12..16].copy_from_slice(&extent.to_be_bytes());
+        data[32..36].copy_from_slice(&checksum.to_be_bytes());
+        data[36..40].copy_from_slice(compiler);
+        data[52..54].copy_from_slice(&release.to_be_bytes());
+        data[54..60].copy_from_slice(serial);
+        data.extend_from_slice(tail);
+
+        data
+    }
+
+    // The treaty's own worked example: Savoir-Faire release 8,
+    // serial 040205, checksum 0x6630 -- an Inform-era serial, so
+    // the checksum rides as four hexadecimal digits (Babel: The
+    // IFID for a legacy Z-code story file).
+    #[test]
+    fn the_treatys_worked_example() {
+        assert_eq!(
+            zcode_ifid(&z_header(8, b"040205", 0x6630, 8)),
+            "ZCODE-8-040205-6630"
+        );
+    }
+
+    // Infocom-era serials stay bare: an 8x date earns no checksum
+    // suffix, and no brand scan either.
+    #[test]
+    fn infocom_identities_stay_bare() {
+        assert_eq!(
+            zcode_ifid(&z_header(88, b"840726", 0x1234, 3)),
+            "ZCODE-88-840726"
+        );
+        assert_eq!(zcode_ifid(&z_header(2, b"AS000C", 0, 1)), "ZCODE-2-AS000C");
+    }
+
+    // The untrusted serials never earn a checksum, and serial
+    // bytes outside the alphanumerics turn to hyphens -- an
+    // all-null serial reads as six of them.
+    #[test]
+    fn serials_clean_and_untrusted_forms_stay_bare() {
+        assert_eq!(
+            zcode_ifid(&z_header(5, &[0; 6], 0xF00D, 1)),
+            "ZCODE-5-------"
+        );
+        assert_eq!(
+            zcode_ifid(&z_header(15, b"999999", 0xF00D, 5)),
+            "ZCODE-15-999999"
+        );
+        assert_eq!(
+            zcode_ifid(&z_header(
+                1,
+                &[b'9', 0xB5, b'0', b'1', b'0', b'1'],
+                0xBEEF,
+                5
+            )),
+            "ZCODE-1-9-0101-BEEF"
+        );
+    }
+
+    // The brand wins where it may exist: a post-2005 serial scans
+    // for the UUID and a lowercase brand reads uppercased; a dated
+    // serial never scans at all.
+    #[test]
+    fn the_brand_wins_where_it_may_exist() {
+        let mut branded = z_header(3, b"070101", 0xAAAA, 8);
+
+        branded.extend_from_slice(b"junk UUID://abc-DEF-123// tail");
+
+        assert_eq!(zcode_ifid(&branded), "ABC-DEF-123");
+
+        let mut dated = z_header(3, b"840726", 0xAAAA, 8);
+
+        dated.extend_from_slice(b"junk UUID://abc-DEF-123// tail");
+
+        assert_eq!(zcode_ifid(&dated), "ZCODE-3-840726");
+    }
+
+    // Glulx identities: Inform-compiled files identify like
+    // Z-code, any other tool's by extent and checksum, and a
+    // brand wins over both.
+    #[test]
+    fn glulx_identities() {
+        assert_eq!(
+            glulx_ifid(&glulx_image(7, b"Info", 12, b"040205", 0x100, b"")),
+            "GLULX-12-040205-00000007"
+        );
+        assert_eq!(
+            glulx_ifid(&glulx_image(7, &[0; 4], 0, &[0; 6], 0x100, b"")),
+            "GLULX-00000100-00000007"
+        );
+        assert_eq!(
+            glulx_ifid(&glulx_image(
+                7,
+                &[0; 4],
+                0,
+                &[0; 6],
+                0x100,
+                b"UUID://1974a053-7db0//"
+            )),
+            "1974A053-7DB0"
+        );
+    }
+
+    // The front door routes by what the bytes claim to be: the
+    // Glulx magic word, a plausible Z-code version byte, or
+    // nothing at all -- and a fragment too short for a header has
+    // no identity either.
+    #[test]
+    fn ifid_routes_by_format() {
+        assert_eq!(
+            ifid(&glulx_image(7, &[0; 4], 0, &[0; 6], 0x100, b"")).as_deref(),
+            Some("GLULX-00000100-00000007")
+        );
+        assert_eq!(
+            ifid(&z_header(8, b"040205", 0x6630, 8)).as_deref(),
+            Some("ZCODE-8-040205-6630")
+        );
+        assert_eq!(ifid(&[0u8; 64]), None);
+
+        let mut exe = b"MZ".to_vec();
+
+        exe.extend(vec![0u8; 62]);
+
+        assert_eq!(ifid(&exe), None);
+        assert_eq!(ifid(&[0x05]), None);
     }
 
     // The walker's own corners: entities decode (undefined ones

@@ -42,6 +42,7 @@ fn main() -> ExitCode {
 
     match arguments.as_slice() {
         [flag, story] if flag == "--header" => header_report(story),
+        [flag, story] if flag == "--babel" => babel_report(story),
         [flag, script] if flag == "--accept" => accepted_session(script),
         [story] if !story.starts_with("--") => play(story, None),
         [seed_flag, seed, story] if seed_flag == "--seed" => match seed.parse::<u32>() {
@@ -53,8 +54,9 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: voxam [--header] [--accept script] [--seed N] [--glkote] \
-                 [--web [--port N]] <story-file>"
+                "usage: voxam [--header] [--babel] [--accept script] [--seed N] \
+                 [--interpreter NAME] [--tandy] [--glkote] [--web [--port N]] \
+                 <story-file>"
             );
             ExitCode::from(EXIT_UNUSABLE)
         }
@@ -73,12 +75,31 @@ fn wired(arguments: &[String]) -> ExitCode {
     let mut port_given = false;
     let mut seed: Option<u32> = None;
     let mut story: Option<String> = None;
+    let mut identity = Identity::default();
     let mut walker = arguments.iter();
 
     while let Some(held) = walker.next() {
         match held.as_str() {
             "--glkote" => glkote = true,
             "--web" => web = true,
+            "--interpreter" => {
+                let Some(name) = walker.next() else {
+                    eprintln!("voxam: --interpreter takes a platform name or number");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                };
+
+                match interpreter_number(name) {
+                    Some(number) => identity.interpreter = Some(number),
+                    None => {
+                        eprintln!(
+                            "voxam: unknown interpreter {name:?}; use a number or one \
+                             of the §11.1.3 platform names"
+                        );
+                        return ExitCode::from(EXIT_UNUSABLE);
+                    }
+                }
+            }
+            "--tandy" => identity.tandy = true,
             "--port" => {
                 port_given = true;
 
@@ -123,9 +144,28 @@ fn wired(arguments: &[String]) -> ExitCode {
     };
 
     if glkote {
-        serve_glkote(&story, seed)
+        serve_glkote(&story, seed, identity)
     } else {
         serve_webbed(&story, seed, port)
+    }
+}
+
+/// The §11.1.3 interpreter numbers, by the names Infocom used --
+/// or any bare number a player claims directly.
+fn interpreter_number(name: &str) -> Option<u8> {
+    match name.to_lowercase().as_str() {
+        "dec-20" => Some(1),
+        "apple-iie" => Some(2),
+        "macintosh" => Some(3),
+        "amiga" => Some(4),
+        "atari-st" => Some(5),
+        "ibm-pc" => Some(6),
+        "commodore-128" => Some(7),
+        "commodore-64" => Some(8),
+        "apple-iic" => Some(9),
+        "apple-iigs" => Some(10),
+        "tandy-color" => Some(11),
+        told => told.parse().ok(),
     }
 }
 
@@ -133,12 +173,14 @@ fn wired(arguments: &[String]) -> ExitCode {
 ///
 /// Nothing else may print there -- no banner, no verdict -- so the
 /// display's own error stanza is the only voice a failure has.
-fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
+fn serve_glkote(path: &str, seed: Option<u32>, identity: Identity) -> ExitCode {
     let path = Path::new(path);
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            eprintln!("voxam: {error}");
+            // Pre-wire refusals speak on stdout as bare voxam:
+            // text -- the shell contract's own word for them.
+            println!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
@@ -148,7 +190,7 @@ fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
     let clean = match sniff(&bytes) {
         Some(StoryFormat::Glulx) => {
             let Ok(Some((loaded, blorb))) = load_glulx(path) else {
-                eprintln!("voxam: {} holds no playable Glulx story", path.display());
+                println!("voxam: {} holds no playable Glulx story", path.display());
                 return ExitCode::from(EXIT_UNUSABLE);
             };
 
@@ -160,7 +202,7 @@ fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
                     &mut writer,
                 ),
                 Err(error) => {
-                    eprintln!("voxam: {error}");
+                    println!("voxam: {error}");
                     return ExitCode::from(EXIT_UNUSABLE);
                 }
             }
@@ -170,7 +212,7 @@ fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
                 voxam_core::aamachine::glkote::serve(loaded, &mut reader, &mut writer, seed)
             }
             Err(error) => {
-                eprintln!("voxam: {error}");
+                println!("voxam: {error}");
                 return ExitCode::from(EXIT_UNUSABLE);
             }
         },
@@ -178,7 +220,7 @@ fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
             let (loaded, blorb) = match load_story(path) {
                 Ok(held) => held,
                 Err(error) => {
-                    eprintln!("voxam: {error}");
+                    println!("voxam: {error}");
                     return ExitCode::from(EXIT_UNUSABLE);
                 }
             };
@@ -187,12 +229,19 @@ fn serve_glkote(path: &str, seed: Option<u32>) -> ExitCode {
                 match voxam_core::zmachine::glkote::fronted(loaded.version(), Some(resources)) {
                     Ok(frontend) => frontend,
                     Err(error) => {
-                        eprintln!("voxam: {error}");
+                        println!("voxam: {error}");
                         return ExitCode::from(EXIT_UNUSABLE);
                     }
                 };
 
-            voxam_core::zmachine::glkote::serve(loaded, frontend, &mut reader, &mut writer, seed)
+            voxam_core::zmachine::glkote::serve_claimed(
+                loaded,
+                frontend,
+                &mut reader,
+                &mut writer,
+                seed,
+                identity,
+            )
         }
     };
 
@@ -252,6 +301,102 @@ fn serve_webbed(path: &str, seed: Option<u32>, port: u16) -> ExitCode {
     };
 
     web::serve_web(&mut face, &listener);
+
+    ExitCode::from(EXIT_OK)
+}
+
+/// Serve `--babel`: the story's identity and its bibliography.
+///
+/// The treaty speaks all three machines: a blorb's iFiction
+/// record answers first, then the packaged or loose story's own
+/// bytes (Babel: The IFID for a blorbed story file) -- and the
+/// record's bibliography rides along when it has any. A
+/// metadata-only blorb still refuses: a blorb with no story "is
+/// not itself a work of IF".
+fn babel_report(path: &str) -> ExitCode {
+    let path = Path::new(path);
+    let name = path
+        .file_name()
+        .map(|held| held.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let suffix = path
+        .extension()
+        .map(|held| held.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let blorbed = BLORB_SUFFIXES.contains(&suffix.as_str());
+
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    let (data, record) = if blorbed {
+        let blorb = match voxam_core::blorb::Blorb::parse(&bytes) {
+            Ok(blorb) => blorb,
+            Err(error) => {
+                println!("voxam: {error}");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+        };
+        let record = blorb.ifiction.as_deref().and_then(|held| {
+            let parsed = voxam_core::babel::ifiction(held);
+
+            if parsed.is_none() {
+                println!("voxam: the iFiction record cannot be read; the story answers instead");
+            }
+
+            parsed
+        });
+        let packaged = blorb
+            .glulx()
+            .map(<[u8]>::to_vec)
+            .or_else(|| blorb.story().map(<[u8]>::to_vec));
+
+        (packaged, record)
+    } else {
+        (Some(bytes), None)
+    };
+
+    let Some(data) = data else {
+        println!(
+            "voxam: {name} packages no story, and a blorb without one is not itself \
+             a work of IF"
+        );
+        return ExitCode::from(EXIT_UNUSABLE);
+    };
+
+    let identity = record
+        .as_ref()
+        .and_then(|held| held.ifid.clone())
+        .or_else(|| voxam_core::babel::ifid(&data));
+
+    let Some(identity) = identity else {
+        println!("voxam: {name} is neither Z-code nor Glulx");
+        return ExitCode::from(EXIT_UNUSABLE);
+    };
+
+    println!("{name}\n");
+    println!("IFID: {identity}");
+
+    let named = record
+        .as_ref()
+        .and_then(|held| held.title.clone())
+        .or_else(|| voxam_core::infocom::title(&identity).map(str::to_string));
+
+    if let Some(named) = named {
+        println!("Title: {named}");
+    }
+
+    if let Some(author) = record.as_ref().and_then(|held| held.author.as_ref()) {
+        println!("Author: {author}");
+    }
+
+    if let Some(headline) = record.as_ref().and_then(|held| held.headline.as_ref()) {
+        println!("Headline: {headline}");
+    }
 
     ExitCode::from(EXIT_OK)
 }

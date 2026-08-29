@@ -86,7 +86,8 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    packaged stories. *Gate met:* identical sessions write
    byte-identical saves under both implementations, restores
    cross both ways, and the saves travel to dfrotz and back.
-   (Babel identities remain, folded into a later milestone.)
+   (The Babel identities landed with milestone 5's gate prep:
+   the desktop shell titles its window by `--babel`.)
 3. **Glulx, plain.** ✅ *(2026-08-29)* The VM, strings, floats,
    accel, Glk over the plain stream. *Gate met:* glulxercise says
    "All tests passed." — 596k instructions, 70 sections, zero

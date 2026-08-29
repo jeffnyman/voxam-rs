@@ -18,6 +18,7 @@ pub mod frontend;
 pub mod glkote;
 pub mod glulx;
 pub mod iff;
+pub mod infocom;
 pub mod saves;
 pub mod screen;
 pub mod wav;

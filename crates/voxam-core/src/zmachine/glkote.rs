@@ -941,12 +941,23 @@ impl Session {
         frontend: GlkOteFrontend,
         seed: Option<u32>,
     ) -> Result<Self, VoxamError> {
+        Self::open_claimed(story, frontend, seed, Identity::default())
+    }
+
+    /// Boot with a claimed identity: the platform number and the
+    /// legendary Tandy bit the CLI's own flags carry (S11.1.3-4).
+    pub fn open_claimed(
+        story: Story,
+        frontend: GlkOteFrontend,
+        seed: Option<u32>,
+        identity: Identity,
+    ) -> Result<Self, VoxamError> {
         let face = Rc::new(RefCell::new(frontend));
         let machine = Machine::new(
             story,
             Box::new(SharedFace { face: face.clone() }),
             seed,
-            Identity::default(),
+            identity,
             None,
         )?;
 
@@ -1452,7 +1463,19 @@ pub fn serve(
     writer: &mut dyn Write,
     seed: Option<u32>,
 ) -> bool {
-    match served(story, frontend, reader, writer, seed) {
+    serve_claimed(story, frontend, reader, writer, seed, Identity::default())
+}
+
+/// Serve with a claimed identity, the CLI flags' own seam.
+pub fn serve_claimed(
+    story: Story,
+    frontend: GlkOteFrontend,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+    seed: Option<u32>,
+    identity: Identity,
+) -> bool {
+    match served(story, frontend, reader, writer, seed, identity) {
         Ok(clean) => clean,
         Err(VoxamError::GlkOteJson(message)) => {
             error_stanza(writer, &format!("voxam: not JSON: {message}"));
@@ -1474,6 +1497,7 @@ fn served(
     reader: &mut dyn BufRead,
     writer: &mut dyn Write,
     seed: Option<u32>,
+    identity: Identity,
 ) -> Result<bool, VoxamError> {
     let opening = read_stanza(reader)?;
     let opening = opening.filter(|held| held.get("type").and_then(Value::as_str) == Some("init"));
@@ -1487,7 +1511,7 @@ fn served(
 
     frontend.begin(&opening)?;
 
-    let mut session = Session::open(story, frontend, seed)?;
+    let mut session = Session::open_claimed(story, frontend, seed, identity)?;
 
     loop {
         session.machine().run()?;
