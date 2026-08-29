@@ -15,17 +15,16 @@
 //! has already been shown, which input fields it holds. Each
 //! machine feeds it the same way from its own screen model.
 //!
-//! Two reshapings from the reference, in the standing manner: the
+//! One reshaping from the reference, in the standing manner: the
 //! stanzas are this crate's own insertion-ordered [`json`] values
-//! rather than dicts (the module doc there says why), and the
-//! iFiction record `carded` reads arrives as a small [`Card`]
-//! until the Babel work lands to feed it.
+//! rather than dicts (the module doc there says why).
 
 pub mod json;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 
+use crate::babel::IFiction;
 use crate::errors::VoxamError;
 use json::{Object, Value};
 
@@ -1439,16 +1438,6 @@ pub fn measured(metrics: &Object, prefix: &str) -> (f64, f64, f64, f64) {
     )
 }
 
-/// The bibliography fields the iFiction card shows -- a stand-in
-/// for the Babel record until that work lands to feed it.
-#[derive(Debug, Clone, Default)]
-pub struct Card {
-    pub title: Option<String>,
-    pub headline: Option<String>,
-    pub author: Option<String>,
-    pub description: Option<String>,
-}
-
 /// The iFiction card as (style name, text) runs.
 ///
 /// The four fields WinFrotz's own little window shows: the title
@@ -1457,7 +1446,7 @@ pub struct Card {
 /// <br/>-broken line its own paragraph -- and a closing blank
 /// line before the story begins. A record with none of them makes
 /// no card at all (Babel: The iFiction format).
-pub fn carded(record: &Card) -> Vec<(String, String)> {
+pub fn carded(record: &IFiction) -> Vec<(String, String)> {
     let mut lines: Vec<(String, String)> = Vec::new();
 
     if let Some(title) = &record.title {

@@ -9,6 +9,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxamError {
     AAMachine(String),
+    Aiff(String),
     Blorb(String),
     GlulxFunction(String),
     GlulxGlk(String),
@@ -19,6 +20,10 @@ pub enum VoxamError {
     GlulxStory(String),
     GlulxString(String),
     GlkOte(String),
+    /// What is not JSON at all -- kept apart from the protocol's
+    /// own refusals so a serving loop can answer the reference's
+    /// "not JSON" error stanza in kind.
+    GlkOteJson(String),
     Iff(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
@@ -40,6 +45,7 @@ pub enum VoxamError {
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (Self::AAMachine(message)
+        | Self::Aiff(message)
         | Self::Blorb(message)
         | Self::GlulxFunction(message)
         | Self::GlulxGlk(message)
@@ -50,6 +56,7 @@ impl fmt::Display for VoxamError {
         | Self::GlulxStory(message)
         | Self::GlulxString(message)
         | Self::GlkOte(message)
+        | Self::GlkOteJson(message)
         | Self::Iff(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)

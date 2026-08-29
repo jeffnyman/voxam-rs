@@ -1176,7 +1176,7 @@ fn exit_forces_a_real_update() {
 // all -- no stray blank lines for a bibliography-less blorb.
 #[test]
 fn an_empty_record_makes_no_card() {
-    assert!(carded(&Card::default()).is_empty());
+    assert!(carded(&IFiction::default()).is_empty());
 }
 
 // The card's four fields land in their dresses, description
@@ -1184,11 +1184,12 @@ fn an_empty_record_makes_no_card() {
 // after.
 #[test]
 fn a_full_record_makes_the_card() {
-    let record = Card {
+    let record = IFiction {
         title: Some("Trinity".to_string()),
         headline: Some("An interactive fantasy".to_string()),
         author: Some("Brian Moriarty".to_string()),
         description: Some("First line.\nSecond line.".to_string()),
+        ..IFiction::default()
     };
 
     assert_eq!(

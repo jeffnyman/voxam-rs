@@ -8,6 +8,9 @@
 //! crates and consume this one.
 
 pub mod aamachine;
+pub mod aiff;
+pub mod babel;
+pub mod base64;
 pub mod blorb;
 pub mod errors;
 pub mod format;
@@ -17,4 +20,5 @@ pub mod glulx;
 pub mod iff;
 pub mod saves;
 pub mod screen;
+pub mod wav;
 pub mod zmachine;

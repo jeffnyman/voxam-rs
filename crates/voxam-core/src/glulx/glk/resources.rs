@@ -13,17 +13,23 @@
 //! asked of the display, because glk_image_get_info must answer
 //! even when nothing can be drawn -- a game may lay out a window
 //! from the dimensions and then discover it has no graphics (Glk:
-//! Testing for Graphics Capabilities). The reference's data-url
-//! renderings (pictured, audible) belong to the wire displays and
-//! arrive with that era.
+//! Testing for Graphics Capabilities). The data-url renderings
+//! (pictured, audible) are the wire displays': a picture or sound
+//! travels the protocol whole, in a container the far side
+//! decodes natively, so no host road and no Blorb interface is
+//! owed there.
 
 use std::collections::HashMap;
 
-use crate::blorb::{Blorb, USAGE_DATA, USAGE_PICTURE, USAGE_SOUND};
-use crate::iff::chunk;
+use crate::aiff;
+use crate::base64::b64;
+use crate::blorb::{Blorb, PNG_ID, USAGE_DATA, USAGE_PICTURE, USAGE_SOUND};
+use crate::iff::{IffChunk, chunk};
+use crate::wav::riff;
 
 const FORM: [u8; 4] = *b"FORM";
 const TEXT: [u8; 4] = *b"TEXT";
+const OGG_ID: [u8; 4] = *b"OGGV";
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const PNG_HEADER_END: usize = 24;
@@ -61,6 +67,21 @@ pub struct ImageInfo {
     pub width: u32,
     /// The height in pixels.
     pub height: u32,
+}
+
+/// The picture whole, as a data: url the display draws directly.
+///
+/// The bytes are the Blorb's own -- PNG or JPEG by chunk kind
+/// (Blorb: Picture Resource Chunks) -- so no host road and no
+/// Blorb interface is owed on the far side.
+pub fn pictured(image: &ImageInfo) -> String {
+    let kind = if image.kind == PNG_ID {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+
+    format!("data:{kind};base64,{}", b64(&image.data))
 }
 
 fn word_at(data: &[u8], at: usize) -> u32 {
@@ -138,6 +159,7 @@ pub struct Resources {
     /// The container, or None without one.
     pub blorb: Option<Blorb>,
     images: HashMap<u32, Option<ImageInfo>>,
+    audible: HashMap<u32, Option<String>>,
 }
 
 impl Resources {
@@ -146,6 +168,7 @@ impl Resources {
         Self {
             blorb,
             images: HashMap::new(),
+            audible: HashMap::new(),
         }
     }
 
@@ -176,6 +199,51 @@ impl Resources {
         }
 
         self.images[&number].as_ref()
+    }
+
+    /// The cover picture the Fspc chunk names, measured, or None.
+    ///
+    /// None for a bare story, a Blorb with no Fspc, or a cover
+    /// whose dimensions cannot be read -- art is a courtesy, never
+    /// a gate (Blorb: Frontispiece Chunk).
+    pub fn frontispiece(&mut self) -> Option<&ImageInfo> {
+        let number = self.blorb.as_ref()?.frontispiece?;
+
+        self.image(number)
+    }
+
+    /// A picture whole, as a data: url a display draws directly.
+    ///
+    /// The bytes are the Blorb's own -- PNG or JPEG by chunk kind
+    /// (Blorb: Picture Resource Chunks) -- so no host road and no
+    /// Blorb interface is owed on the far side. None for a number
+    /// no picture answers.
+    pub fn pictured(&mut self, number: u32) -> Option<String> {
+        self.image(number).map(pictured)
+    }
+
+    /// A sound whole, as a data: url a display plays directly.
+    ///
+    /// AIFF -- every vendored Infocom sound -- travels re-wrapped
+    /// as WAVE, since a browser's decoder handles WAVE everywhere
+    /// and AIFF almost nowhere; an Ogg sound travels as itself,
+    /// which browsers decode natively (Blorb: Sound Resource
+    /// Chunks). MOD music has no decoder on either side of the
+    /// wire and answers None, as does an AIFF too broken to read
+    /// -- a sound that cannot travel is a sound the display cannot
+    /// start.
+    pub fn audible(&mut self, number: u32) -> Option<String> {
+        if !self.audible.contains_key(&number) {
+            let held = self
+                .blorb
+                .as_ref()
+                .and_then(|blorb| blorb.resource(USAGE_SOUND, number))
+                .and_then(|found| sounded(&found.chunk));
+
+            self.audible.insert(number, held);
+        }
+
+        self.audible[&number].clone()
     }
 
     /// Return a sound resource's bytes, or None if absent.
@@ -213,6 +281,21 @@ impl Resources {
     }
 }
 
+/// One sound chunk as a data: url in a wire-worthy container.
+fn sounded(piece: &IffChunk) -> Option<String> {
+    if piece.chunk_id == FORM {
+        let sound = aiff::decode(&chunk(&piece.chunk_id, &piece.payload)).ok()?;
+
+        return Some(format!("data:audio/wav;base64,{}", b64(&riff(&sound))));
+    }
+
+    if piece.chunk_id == OGG_ID {
+        return Some(format!("data:audio/ogg;base64,{}", b64(&piece.payload)));
+    }
+
+    None
+}
+
 /// A chunk's bytes: the whole thing for a FORM, the body else.
 ///
 /// A FORM resource is a complete nested IFF file -- an AIFF sound,
@@ -225,3 +308,7 @@ fn contents(chunk_id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
 
     payload.to_vec()
 }
+
+#[cfg(test)]
+#[path = "resources_tests.rs"]
+mod tests;
