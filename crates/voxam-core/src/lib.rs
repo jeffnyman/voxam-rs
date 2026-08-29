@@ -11,6 +11,7 @@ pub mod blorb;
 pub mod errors;
 pub mod format;
 pub mod frontend;
+pub mod glulx;
 pub mod iff;
 pub mod saves;
 pub mod zmachine;

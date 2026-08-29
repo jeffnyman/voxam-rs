@@ -42,3 +42,20 @@ print("  " + ", ".join(str(rng.roll(100)) for _ in range(20)))
 rng = Randomizer(seed=42)
 print("roll(6) x20, session seed 42:")
 print("  " + ", ".join(str(rng.roll(6)) for _ in range(20)))
+
+# The Glulx stream: same xorshift32, its own API (word, below).
+sys.path.insert(0, str(reference / "src"))
+from voxam.glulx.rng import Randomizer as GlulxRandomizer  # noqa: E402
+
+glulx = GlulxRandomizer(seed=1137)
+print("glulx word() x10, session seed 1137:")
+print("  " + ", ".join(f"0x{glulx.word():08X}" for _ in range(10)))
+
+glulx = GlulxRandomizer(seed=42)
+print("glulx below(100) x20, session seed 42:")
+print("  " + ", ".join(str(glulx.below(100)) for _ in range(20)))
+
+glulx = GlulxRandomizer(seed=1137)
+glulx.seed(5000)
+print("glulx below(6) x20 after seed(5000):")
+print("  " + ", ".join(str(glulx.below(6)) for _ in range(20)))

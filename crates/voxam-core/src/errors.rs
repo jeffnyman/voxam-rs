@@ -9,6 +9,8 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxamError {
     Blorb(String),
+    GlulxMemory(String),
+    GlulxStory(String),
     Iff(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
@@ -30,6 +32,8 @@ pub enum VoxamError {
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (Self::Blorb(message)
+        | Self::GlulxMemory(message)
+        | Self::GlulxStory(message)
         | Self::Iff(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)
