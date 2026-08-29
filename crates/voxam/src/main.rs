@@ -1,7 +1,8 @@
-//! The `voxam` command. Three faces so far: point it at a
-//! Z-Machine story and it plays on the plain stream; ask for
-//! `--header` and it reads the story's manifest (§11.1); any
-//! other format is named by its magic.
+//! The `voxam` command. Point it at a Z-Machine or Glulx story
+//! and it plays on the plain stream; an Å-machine story plays at
+//! the terminal, the third machine's own face; ask for `--header`
+//! and it reads the story's manifest (§11.1); any other format is
+//! named by its magic.
 
 mod accept;
 mod glance;
@@ -11,6 +12,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
+use voxam_core::aamachine::story::Story as AAMachineStory;
+use voxam_core::aamachine::terminal::played as aamachine_played;
 use voxam_core::format::{StoryFormat, sniff};
 use voxam_core::frontend::plain;
 use voxam_core::glulx::glk::api::Glk;
@@ -60,6 +63,17 @@ fn accepted_session(script_path: &str) -> ExitCode {
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
+
+    // The session instruments the other machines carry are
+    // refused by name rather than half-working: the acceptance
+    // driver is the third machine's later road.
+    if aamachine_story(&script.game) {
+        println!(
+            "voxam: the Å-machine plays live for now -- the acceptance \
+             driver and the tracer are later roads"
+        );
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
 
     match load_glulx(&script.game) {
         Err(error) => {
@@ -171,10 +185,88 @@ fn accepted_session(script_path: &str) -> ExitCode {
     }
 }
 
+/// Whether the file opens as an Å-machine story's FORM AAVM.
+fn aamachine_story(path: &Path) -> bool {
+    std::fs::read(path)
+        .is_ok_and(|data| data.len() >= 12 && &data[..4] == b"FORM" && &data[8..12] == b"AAVM")
+}
+
+/// Run one Å-machine story at the terminal, the reference
+/// frontends' own shape, certified against their transcripts.
+///
+/// The dress waits on the honesty gate -- only a real terminal is
+/// ever dressed -- and the width takes the shell's COLUMNS word
+/// for it, the classic 80 otherwise: the painted terminal is the
+/// milestone that learns to measure for itself.
+fn aamachine_session(path: &str, seed: Option<u32>) -> ExitCode {
+    use std::io::IsTerminal;
+
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+    let story = match AAMachineStory::new(&data) {
+        Ok(story) => story,
+        Err(error) => {
+            println!("voxam: {error}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+
+    let width = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|columns| columns.parse::<i64>().ok())
+        .unwrap_or(80);
+    let dressed = std::io::stdout().is_terminal();
+    // The line source and the filename prompt each lock stdin
+    // only for their own read, so neither starves the other.
+    let source = Box::new(|| {
+        let mut line = String::new();
+
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(line),
+        }
+    });
+    let asked = Box::new(|prompt: &str| {
+        let mut out = std::io::stdout();
+        let _ = out.write_all(prompt.as_bytes());
+        let _ = out.flush();
+
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+
+        answer.trim_end_matches(['\r', '\n']).to_string()
+    });
+
+    match aamachine_played(
+        story,
+        seed,
+        source,
+        Box::new(std::io::stdout()),
+        asked,
+        width,
+        dressed,
+    ) {
+        Ok(()) => ExitCode::from(EXIT_OK),
+        Err(error) => {
+            println!("voxam: {error}");
+            ExitCode::from(EXIT_UNUSABLE)
+        }
+    }
+}
+
 /// Play a Z-Machine story on the plain stream: text flows out,
 /// lines flow in, and end of input ends the session.
 fn play(path: &str, seed: Option<u32>) -> ExitCode {
     println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
+
+    if aamachine_story(Path::new(path)) {
+        return aamachine_session(path, seed);
+    }
 
     match load_glulx(Path::new(path)) {
         Err(error) => {

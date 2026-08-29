@@ -10,4 +10,5 @@ pub mod machine;
 pub mod output;
 pub mod saves;
 pub mod story;
+pub mod terminal;
 pub mod text;

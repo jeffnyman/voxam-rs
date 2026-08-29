@@ -92,8 +92,14 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    "All tests passed." — 596k instructions, 70 sections, zero
    failures — and both Glulx acceptance recordings replay
    byte-identically, which closes the ledger at 44 of 44.
-4. **Å-machine.** *Gate:* the reference batteries replay
-   byte-identical, as they do under Python.
+4. **Å-machine.** ✅ *(2026-08-29)* The story file, the text
+   apparatus, the engine with its Prolog heart, the AASV
+   savefile, and the plain and terminal voices. *Gate met:* the
+   reference batteries replay byte-identical -- the vendored gold
+   transcripts (the community fork's own engine at seed 1234)
+   land whole under the plain voice, Miss Gosling's Last Case
+   included, and the terminal sessions diff clean against the
+   reference implementation stream for stream.
 5. **The wire.** `--glkote` stanzas over stdio, `--web`, the
    `voxam:` sidecar block. *Gate:* the existing Tauri shell plays
    stories against the Rust binary, unmodified.

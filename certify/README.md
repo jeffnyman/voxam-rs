@@ -22,6 +22,7 @@ developing it does.
 | `glulxercise.sh` | the M3 gate itself: glulxercise run whole under a scripted Glk display, the verdict the story's own -- "All tests passed." |
 | `aastory-diff.sh` | every .aastory fixture the reference keeps -- header claims, bibliography, extended characters, chunk census, and the whole dictionary decoded, agreeing line for line |
 | `aawalk-diff.sh` | the M4 gate: the vendored gold transcripts -- the community fork's own engine at seed 1234 -- replayed under the port's plain voice, byte for byte: the opcode exercise twice over, Miss Gosling's Last Case whole, format 1.0, and the codepoints walk |
+| `aaterminal-diff.sh` | the terminal face under both implementations with the same scripted streams -- Cloak of Darkness on a written walkthrough, the other fixtures on their own input scripts -- the sessions diffed whole |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors
