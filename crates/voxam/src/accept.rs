@@ -85,9 +85,32 @@ pub fn shown(command: &str) -> String {
     }
 }
 
-/// The special keys a recording can press; the keystroke seam that
-/// spends them has not arrived yet.
-const KEY_TOKENS: [&str; 6] = ["<up>", "<down>", "<left>", "<right>", "<escape>", "<space>"];
+/// The special keys a recording can press, one line each: the
+/// translated command is the key's own input character -- the
+/// §3.8.4 cursor codes, the §3.8.2.6 escape, and the space bar,
+/// which line-stripping would otherwise erase. The keystroke seam
+/// spends each as a single press; the enter key stays what it
+/// always was: a bare >.
+const KEY_TOKENS: [(&str, &str); 6] = [
+    ("<up>", "\u{81}"),
+    ("<down>", "\u{82}"),
+    ("<left>", "\u{83}"),
+    ("<right>", "\u{84}"),
+    ("<escape>", "\u{1b}"),
+    ("<space>", " "),
+];
+
+/// What the replay transcript shows for a pressed key: the token,
+/// never the raw control character.
+pub fn echoed(command: &str) -> &str {
+    for (token, character) in KEY_TOKENS {
+        if command == character {
+            return token;
+        }
+    }
+
+    command
+}
 
 impl AcceptanceScript {
     /// Read an acceptance script file (the reference grammar):
@@ -142,17 +165,21 @@ impl AcceptanceScript {
                 continue;
             }
 
-            if KEY_TOKENS.contains(&line)
-                || line.starts_with("<click ")
+            if line.starts_with("<click ")
+                || line.starts_with("<double-click ")
                 || line.starts_with("<link ")
             {
                 return Err(format!(
-                    "line {number}: {line} needs the keystroke seam, which has not \
+                    "line {number}: {line} needs the pointer seam, which has not \
                      arrived yet"
                 ));
             }
 
-            commands.push((command_of(line), number));
+            if let Some((_, character)) = KEY_TOKENS.iter().find(|(token, _)| *token == line) {
+                commands.push((character.to_string(), number));
+            } else {
+                commands.push((command_of(line), number));
+            }
         }
 
         let game = game.ok_or_else(|| {

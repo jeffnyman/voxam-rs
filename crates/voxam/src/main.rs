@@ -121,7 +121,7 @@ fn accepted_session(script_path: &str) -> ExitCode {
                         // The replay's echo: the transcript shows
                         // what was entered at each prompt, since no
                         // fingers ever typed it there.
-                        println!("{}", entry.0);
+                        println!("{}", accept::echoed(&entry.0));
                         let _ = std::io::stdout().flush();
                         machine.deliver_line(&entry.0, 0)?;
                     }
