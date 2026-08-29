@@ -68,7 +68,7 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
 | `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** blessed's cell painting maps to ratatui's buffer model, not line-for-line. |
 | `stage.py`, `gallery.py`, `speaker.py` | deferred | The pygame window. The webview face already renders V6 art, sound, and mouse; decide later whether a native window still earns its keep. |
-| `web.py`, `glkote.py`, `*/glkote.py` | `voxam` (CLI) | `--web` on a stdlib-adjacent server (`tiny_http` or hand-rolled), `--glkote` as serde_json over stdio. The wire types live in `voxam-core`. |
+| `web.py`, `glkote.py`, `*/glkote.py` | `voxam` (CLI) | `--web` on a stdlib-adjacent server (`tiny_http` or hand-rolled), `--glkote` over stdio. The wire types live in `voxam-core`, on a hand-rolled JSON that keeps Python's exact spelling -- insertion-ordered keys, compact separators, ensure_ascii -- because the stanza sweeps diff byte for byte, which serde_json's dialect would part. |
 | `filmstrip.py` | with the faces | Screenshot regression; wants the faces standing first. |
 | `tests/` (42k lines) | selectively | Port unit tests for the decoders (ZSCII, operands, Quetzal, IFF); the recordings certify the rest end-to-end. |
 

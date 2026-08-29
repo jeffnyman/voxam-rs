@@ -18,6 +18,7 @@ pub enum VoxamError {
     GlulxStack(String),
     GlulxStory(String),
     GlulxString(String),
+    GlkOte(String),
     Iff(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
@@ -48,6 +49,7 @@ impl fmt::Display for VoxamError {
         | Self::GlulxStack(message)
         | Self::GlulxStory(message)
         | Self::GlulxString(message)
+        | Self::GlkOte(message)
         | Self::Iff(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)
