@@ -108,6 +108,30 @@ const DEFAULT_SCAN_FORM: u16 = 0x82;
 const SCAN_WORD_BIT: u16 = 0x80;
 const SCAN_FIELD_MASK: u16 = 0x7F;
 
+/// The §8.1.2 fonts: 0 asks which is current, 1 is normal, 3 the
+/// character graphics font, 4 fixed-pitch; a font not on offer
+/// stores the 0 refusal §8.1.3 builds permission on.
+const CURRENT_FONT: u16 = 0;
+const NORMAL_FONT: u16 = 1;
+const GRAPHICS_FONT: u16 = 3;
+const COURIER_FONT: u16 = 4;
+const FONT_REFUSED: u16 = 0;
+
+/// erase_line 1 erases from the cursor to the end of its line
+/// (§15 erase_line).
+const ERASE_TO_END: u16 = 1;
+
+/// erase_window's signed operand: -1 unsplits and clears (§8.7.3.3).
+const UNSPLIT_ERASE: i32 = -1;
+
+/// print_table's optional operands (§15 print_table).
+const PRINT_TABLE_HEIGHT_OPERAND: usize = 2;
+const PRINT_TABLE_SKIP_OPERAND: usize = 3;
+
+/// tokenise's optional operands (§15 tokenise).
+const TOKENISE_DICTIONARY_OPERAND: usize = 2;
+const TOKENISE_FLAG_OPERAND: usize = 3;
+
 const SIGN_BIT: u16 = 0x8000;
 const WORD_MASK: i64 = 0xFFFF;
 const WORD_SIZE: usize = 2;
@@ -137,13 +161,22 @@ pub struct Identity {
     pub tandy: bool,
 }
 
-/// One suspended line read: what the machine stands waiting for.
+/// What a suspended read waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wants {
+    Line,
+    Key,
+}
+
+/// One suspended read: what the machine stands waiting for.
 ///
 /// The pc has not moved past the read, and its operands' side
 /// effects must never be repeated, so the whole post-input tail
 /// parks here -- delivery runs the tail and steps past the
 /// instruction, and nothing is ever re-executed.
 pub struct Reading {
+    /// Whether a whole line or a single keystroke is owed.
+    pub wants: Wants,
     instruction: Instruction,
     text_buffer: usize,
     parse_buffer: usize,
@@ -193,11 +226,23 @@ pub struct Machine {
     pc: usize,
     running: bool,
     screen_selected: bool,
+    /// Whether the story window (window 0) is selected: the only
+    /// window whose text belongs in a transcript (§7.1.1).
+    story_window: bool,
+    font: u16,
     recording_commands: bool,
     file_input: bool,
     redirections: Vec<(usize, Units)>,
     undo: VecDeque<Snapshot>,
     waiting: Option<Reading>,
+    /// The keystroke queue: read_char spends one scripted line a
+    /// character at a time (§15 read_char).
+    pending_keys: VecDeque<char>,
+    /// The nimble half of the patient typist: when an interrupt
+    /// terminates a timed read_char and the game loops straight
+    /// back to the SAME read, the burned interval was typing time
+    /// and the retry finds the keys ready. The address is the gate.
+    typist_ready: Option<usize>,
     passed_reserved: HashSet<u8>,
 }
 
@@ -228,11 +273,15 @@ impl Machine {
             pc: 0,
             running: true,
             screen_selected: true,
+            story_window: true,
+            font: NORMAL_FONT,
             recording_commands: false,
             file_input: false,
             redirections: Vec::new(),
             undo: VecDeque::new(),
             waiting: None,
+            pending_keys: VecDeque::new(),
+            typist_ready: None,
             passed_reserved: HashSet::new(),
         };
 
@@ -379,17 +428,35 @@ impl Machine {
         self.execute(&instruction)
     }
 
-    /// Complete a suspended line read with the player's text.
+    /// Complete a suspended read with the player's text.
     ///
-    /// The terminator is zero for a plain new-line, or the
-    /// §10.5.2.1 code that ended the line -- one the read's own
-    /// table named.
+    /// A line read takes the whole line; the terminator is zero for
+    /// a plain new-line, or the §10.5.2.1 code that ended the line
+    /// -- one the read's own table named. A keystroke read spends
+    /// the line through the queue instead, exactly as the
+    /// reference's blocking path does: an empty line is the return
+    /// key alone, and a longer line queues its characters to be
+    /// typed one read_char at a time.
     pub fn deliver_line(&mut self, line: &str, terminator: u16) -> Result<(), VoxamError> {
         let Some(waiting) = self.waiting.take() else {
             return Err(instruction_error(
-                "a line arrived with no line read suspended to receive it".into(),
+                "a line arrived with no read suspended to receive it".into(),
             ));
         };
+
+        if waiting.wants == Wants::Key {
+            if line.is_empty() {
+                return self.landed_key(&waiting.instruction, 13);
+            }
+
+            self.pending_keys.extend(line.chars());
+
+            let key = self.pending_keys.pop_front().expect("a non-empty line");
+            let repertoire = extras(&self.memory)?;
+            let code = char_to_zscii(key, &repertoire)?;
+
+            return self.landed_key(&waiting.instruction, code);
+        }
 
         if terminator != 0 && !waiting.terminators.contains(&terminator) {
             self.waiting = Some(waiting);
@@ -459,7 +526,7 @@ impl Machine {
             return Ok(());
         }
 
-        if self.transcripting()? {
+        if self.story_window && self.transcripting()? {
             // The transcript file is the scribe's, and this session
             // carries none yet: the frontier reports itself.
             return Err(unimplemented("output stream 2", self.pc));
@@ -561,6 +628,19 @@ impl Machine {
             "save_undo" => ran(self.op_save_undo(instruction)),
             "restore_undo" => ran(self.op_restore_undo(instruction)),
             "restart" => ran(self.op_restart()),
+            "set_text_style" => ran(self.op_set_text_style(instruction)),
+            "set_font" => ran(self.op_set_font(instruction)),
+            "erase_window" => ran(self.op_erase_window(instruction)),
+            "erase_line" => ran(self.op_erase_line(instruction)),
+            "buffer_mode" => ran(self.op_buffer_mode(instruction)),
+            "split_window" => ran(self.op_split_window(instruction)),
+            "set_window" => ran(self.op_set_window(instruction)),
+            "set_cursor" => ran(self.op_set_cursor(instruction)),
+            "get_cursor" => ran(self.op_get_cursor(instruction)),
+            "print_table" => ran(self.op_print_table(instruction)),
+            "copy_table" => ran(self.op_copy_table(instruction)),
+            "tokenise" => ran(self.op_tokenise(instruction)),
+            "encode_text" => ran(self.op_encode_text(instruction)),
             "set_colour" | "set_true_colour" => {
                 // A frontend that truthfully declared no colours
                 // makes the request a legitimate no-op (§8.3.1).
@@ -577,6 +657,7 @@ impl Machine {
             }
             "ext_reserved" => ran(self.op_ext_reserved(instruction)),
             "sread" | "aread" => self.op_sread(instruction),
+            "read_char" => self.op_read_char(instruction),
             "quit" => {
                 self.running = false;
                 Ok(Step::Ran)
@@ -1631,8 +1712,305 @@ impl Machine {
         self.redirections.clear();
         self.screen_selected = true;
 
+        // The current font is interpreter bookkeeping, so a restart
+        // returns it to normal along with the rest.
+        self.font = NORMAL_FONT;
+        self.frontend.set_font(NORMAL_FONT);
+
         self.declare_capabilities()?;
         self.start_execution()
+    }
+
+    /// Hand the requested type style to the frontend (§8.7); each
+    /// frontend renders the styles it claimed and ignores the rest.
+    fn op_set_text_style(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let style = self.value(&instruction.operands[0])?;
+
+        self.frontend.set_style(style);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Choose a §8.1.2 font, storing the one it replaces (§15).
+    /// Font 0 asks which is current; one not on offer changes
+    /// nothing and stores 0, the refusal §8.1.3 builds on.
+    fn op_set_font(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let font = self.value(&instruction.operands[0])?;
+
+        if font == CURRENT_FONT {
+            let current = self.font;
+            self.store_result(instruction.store_variable, current)?;
+        } else if self.font_available(font) {
+            let previous = self.font;
+            self.font = font;
+
+            self.frontend.set_font(font);
+            self.store_result(instruction.store_variable, previous)?;
+        } else {
+            self.store_result(instruction.store_variable, FONT_REFUSED)?;
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Whether the frontend has a §8.1.2 font to offer: normal and
+    /// fixed-pitch are one face on a character terminal, the §16
+    /// font belongs to frontends that claimed it, and everything
+    /// else is refused (§8.1.4, §8.1.6).
+    fn font_available(&self, font: u16) -> bool {
+        if font == NORMAL_FONT || font == COURIER_FONT {
+            return true;
+        }
+
+        font == GRAPHICS_FONT && self.frontend.has_character_graphics()
+    }
+
+    /// Hand a window erasure to the frontend (§8.7): -1 unsplits
+    /// and clears everything, leaving the lower window selected
+    /// (§8.7.3.3). The Version 6 forms wait with Version 6.
+    fn op_erase_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let window = signed(self.value(&instruction.operands[0])?);
+
+        if window == UNSPLIT_ERASE {
+            self.story_window = true;
+        }
+
+        self.frontend.erase_window(window);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Erase rightward from the cursor (§15 erase_line): value 1
+    /// erases to the end of the line; any other value does nothing
+    /// before Version 6.
+    fn op_erase_line(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let value = self.value(&instruction.operands[0])?;
+
+        if value == ERASE_TO_END {
+            self.frontend.erase_line();
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Hand the word-wrap buffering toggle to the frontend (§8.7).
+    fn op_buffer_mode(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let buffered = self.value(&instruction.operands[0])?;
+
+        self.frontend.set_buffering(buffered != 0);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Hand the upper window's new height to the frontend (§8.7.2).
+    fn op_split_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let height = self.value(&instruction.operands[0])?;
+
+        self.frontend.split_window(height);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Hand the window selection to the frontend (§8.7.2).
+    fn op_set_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let window = self.value(&instruction.operands[0])?;
+
+        self.story_window = window == 0;
+        self.frontend.set_window(window);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Move the cursor (§8.7.2, §15 set_cursor); the Version 6
+    /// forms wait with Version 6.
+    fn op_set_cursor(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let line = self.value(&instruction.operands[0])?;
+        let column = self.value(&instruction.operands[1])?;
+
+        self.frontend.set_cursor(line, column);
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Write the cursor's row and column into an array (§15): word
+    /// 0 the row, word 1 the column -- the upper window's cursor,
+    /// the one set_cursor can move (§8.7.2.3.2).
+    fn op_get_cursor(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let array = usize::from(self.value(&instruction.operands[0])?);
+        let (row, column) = self.frontend.cursor_position();
+
+        self.memory.write_word(array, row)?;
+        self.memory.write_word(array + 2, column)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Print a rectangle of ZSCII rows from a table (§15
+    /// print_table). On the screen the rectangle spreads from the
+    /// cursor; into a stream 3 table, or with the screen
+    /// deselected, the rows travel as newline-separated lines --
+    /// which is also what a plain transcript shows.
+    fn op_print_table(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        let table = usize::from(values[0]);
+        let width = usize::from(values[1]);
+        let height = values.get(PRINT_TABLE_HEIGHT_OPERAND).copied().unwrap_or(1);
+        let skip = usize::from(values.get(PRINT_TABLE_SKIP_OPERAND).copied().unwrap_or(0));
+
+        let repertoire = extras(&self.memory)?;
+        let version = self.memory.header().version();
+        let mut rows: Vec<Units> = Vec::new();
+        let mut position = table;
+
+        for _ in 0..height {
+            let mut row: Units = Vec::new();
+
+            for offset in 0..width {
+                let code = self.memory.read_byte(position + offset)?;
+                row.extend(zscii_to_units(u16::from(code), &repertoire, version)?);
+            }
+
+            rows.push(row);
+            position += width + skip;
+        }
+
+        if !self.redirections.is_empty() || !self.screen_selected {
+            for (index, row) in rows.iter().enumerate() {
+                if index > 0 {
+                    self.print_units(&[u16::from(b'\n')])?;
+                }
+
+                self.print_units(row)?;
+            }
+        } else {
+            let shown: Vec<String> = rows.iter().map(|row| units_to_string(row)).collect();
+            self.frontend.write_rectangle(&shown);
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Copy or zero a run of table bytes (§15 copy_table): a zero
+    /// second table zeroes size bytes of the first; a positive
+    /// size copies without corruption however the tables overlap;
+    /// a negative size forces a forward byte-at-a-time smear.
+    fn op_copy_table(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        let first = usize::from(values[0]);
+        let second = usize::from(values[1]);
+        let size = signed(values[2]);
+
+        if second == 0 {
+            for offset in 0..size.unsigned_abs() as usize {
+                self.memory.write_byte(first + offset, 0)?;
+            }
+        } else if size < 0 {
+            for offset in 0..(-size) as usize {
+                let value = self.memory.read_byte(first + offset)?;
+                self.memory.write_byte(second + offset, value)?;
+            }
+        } else {
+            let mut data = Vec::with_capacity(size as usize);
+
+            for offset in 0..size as usize {
+                data.push(self.memory.read_byte(first + offset)?);
+            }
+
+            for (offset, value) in data.iter().enumerate() {
+                self.memory.write_byte(second + offset, *value)?;
+            }
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Lexically analyse text already in the buffer (§15
+    /// tokenise): the lexing half of read as its own opcode. A
+    /// nonzero third operand names a custom dictionary, and a
+    /// nonzero fourth leaves unrecognised words' slots untouched.
+    fn op_tokenise(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        let text_buffer = usize::from(values[0]);
+        let parse_buffer = usize::from(values[1]);
+        let base = values
+            .get(TOKENISE_DICTIONARY_OPERAND)
+            .copied()
+            .filter(|&address| address != 0)
+            .map(usize::from);
+        let keep = values
+            .get(TOKENISE_FLAG_OPERAND)
+            .is_some_and(|&flag| flag != 0);
+
+        // tokenise exists from Version 5, so the buffer is always
+        // the counted layout: length in byte 1, text from byte 2
+        // (§15 read). The bytes travel as their raw codepoints,
+        // exactly as the reference reads them.
+        let count = usize::from(self.memory.read_byte(text_buffer + 1)?);
+        let mut line = String::with_capacity(count);
+
+        for offset in 0..count {
+            let code = self.memory.read_byte(text_buffer + 2 + offset)?;
+            line.push(char::from_u32(u32::from(code)).expect("a byte is always a char"));
+        }
+
+        self.parse_with(parse_buffer, &line, 2, base, keep)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Encode buffer text in dictionary form (§15 encode_text):
+    /// the operands are followed to the letter, with no hunting
+    /// for a terminating 0.
+    fn op_encode_text(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        let text = usize::from(values[0]);
+        let length = usize::from(values[1]);
+        let start = usize::from(values[2]);
+        let coded = usize::from(values[3]);
+
+        let mut word = String::with_capacity(length);
+
+        for offset in 0..length {
+            let code = self.memory.read_byte(text + start + offset)?;
+            word.push(char::from_u32(u32::from(code)).expect("a byte is always a char"));
+        }
+
+        let rows = crate::zmachine::zscii::alphabets(&self.memory)?;
+        let repertoire = extras(&self.memory)?;
+        let encoded = crate::zmachine::zscii::encode_word(
+            self.memory.header().version(),
+            &word,
+            Some(&rows),
+            &repertoire,
+        )?;
+
+        for (offset, value) in encoded.iter().enumerate() {
+            self.memory.write_byte(coded + offset, *value)?;
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
     }
 
     /// Pass over a future Standard's EXT opcode, warning once
@@ -1688,10 +2066,26 @@ impl Machine {
             )));
         }
 
-        let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
+        // A line read is a fresh sitting: the interval a terminated
+        // read_char burned belonged to the keystroke rhythm, not to
+        // this prompt (§15 read_char).
+        self.typist_ready = None;
+
         let (time, routine) = read_cadence(&values, version);
 
+        // The patient typist lets one interval elapse before the
+        // line arrives: the routine fires once, and a true return
+        // erases the input and ends the read with 0 stored (§15).
+        if time != 0 && routine != 0 && self.interrupt(routine)? != 0 {
+            self.abandoned_line(instruction, text_buffer, parse_buffer, counted)?;
+
+            return Ok(Step::Ran);
+        }
+
+        let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
+
         self.waiting = Some(Reading {
+            wants: Wants::Line,
             instruction: instruction.clone(),
             text_buffer,
             parse_buffer,
@@ -1705,6 +2099,149 @@ impl Machine {
         });
 
         Ok(Step::Suspended)
+    }
+
+    /// Read one keystroke, storing its ZSCII code (§15 read_char).
+    ///
+    /// Keys already under the fingers -- a queue mid-line -- land
+    /// at once. A time and routine pair runs the patient typist:
+    /// the routine fires once per fresh sitting, a true return
+    /// ending the read with 0 stored, and the retry at the SAME
+    /// address finds the keys ready -- Custard's animation loop
+    /// depends on exactly that nimbleness.
+    fn op_read_char(&mut self, instruction: &Instruction) -> Result<Step, VoxamError> {
+        let values = self.values(instruction)?;
+
+        // The device operand itself may be omitted, and an absent
+        // device is the keyboard, there being no other (§15).
+        if let Some(&device) = values.first()
+            && device != 1
+        {
+            return Err(instruction_error(format!(
+                "read_char at ${:04x} asks for input device {device}, but the \
+                 keyboard, 1, is the only device there is (§15 read_char)",
+                instruction.address
+            )));
+        }
+
+        let time = values.get(1).copied().unwrap_or(0);
+        let routine = values.get(2).copied().unwrap_or(0);
+        let version = self.memory.header().version();
+
+        let ready = !self.pending_keys.is_empty() || self.typist_ready == Some(instruction.address);
+        self.typist_ready = None;
+
+        if !ready
+            && version >= TIMED_READ_VERSION
+            && time != 0
+            && routine != 0
+            && self.interrupt(routine)? != 0
+        {
+            self.typist_ready = Some(instruction.address);
+            self.abandoned_key(instruction)?;
+
+            return Ok(Step::Ran);
+        }
+
+        if let Some(key) = self.pending_keys.pop_front() {
+            let repertoire = extras(&self.memory)?;
+            let code = char_to_zscii(key, &repertoire)?;
+
+            self.landed_key(instruction, code)?;
+
+            return Ok(Step::Ran);
+        }
+
+        self.waiting = Some(Reading {
+            wants: Wants::Key,
+            instruction: instruction.clone(),
+            text_buffer: 0,
+            parse_buffer: 0,
+            counted: false,
+            capacity: 0,
+            preloaded: 0,
+            held: String::new(),
+            terminators: HashSet::new(),
+            time,
+            routine,
+        });
+
+        Ok(Step::Suspended)
+    }
+
+    /// Finish a keystroke read: store the code, step past.
+    fn landed_key(&mut self, instruction: &Instruction, code: u16) -> Result<(), VoxamError> {
+        self.store_result(instruction.store_variable, code)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// End a keystroke read the interrupt way: 0 stored.
+    fn abandoned_key(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        self.store_result(instruction.store_variable, 0)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// End a line read the interrupt way: erased and over (§15
+    /// read). A counted buffer reports zero letters typed, a
+    /// terminated one an empty string, and the lexing sees that
+    /// emptiness.
+    fn abandoned_line(
+        &mut self,
+        instruction: &Instruction,
+        text_buffer: usize,
+        parse_buffer: usize,
+        counted: bool,
+    ) -> Result<(), VoxamError> {
+        if counted {
+            self.memory.write_byte(text_buffer + 1, 0)?;
+        } else {
+            self.write_text(text_buffer + 1, "", true)?;
+        }
+
+        if parse_buffer != 0 || !counted {
+            let first_letter = if counted { 2 } else { 1 };
+
+            self.parse(parse_buffer, "", first_letter)?;
+        }
+
+        if instruction.opcode.stores {
+            self.store_result(instruction.store_variable, 0)?;
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Run a timed-input interrupt routine to completion (§15
+    /// read): called with no arguments through the ordinary call
+    /// machinery, its result routed through the evaluation stack,
+    /// nested frames running until the interrupt's own frame
+    /// unwinds. Returns the routine's value -- or true when the
+    /// story quit mid-interrupt, because input has certainly ended.
+    fn interrupt(&mut self, packed: u16) -> Result<u16, VoxamError> {
+        let address = routine_address(&self.memory.header(), packed)?;
+        let routine = Routine::parse(&self.memory, address)?;
+        let floor = self.calls.depth();
+
+        self.calls.call(&routine, &[], self.pc, Some(0))?;
+        self.pc = routine.first_instruction;
+
+        while self.running && self.calls.depth() > floor {
+            if self.step()? == Step::Suspended {
+                return Err(unimplemented("a read inside an interrupt routine", self.pc));
+            }
+        }
+
+        if !self.running {
+            return Ok(TRUE_VALUE);
+        }
+
+        self.variables.read(&self.memory, &mut self.calls, 0)
     }
 
     /// The §15 preload already in a counted buffer, decoded.
@@ -1863,6 +2400,21 @@ impl Machine {
         line: &str,
         first_letter: usize,
     ) -> Result<(), VoxamError> {
+        self.parse_with(parse_buffer, line, first_letter, None, false)
+    }
+
+    /// The full lexing seam tokenise shares (§15 tokenise): a
+    /// custom dictionary when one is named, and with
+    /// keep_unrecognized an absent word's block is left untouched
+    /// so successive passes accumulate.
+    fn parse_with(
+        &mut self,
+        parse_buffer: usize,
+        line: &str,
+        first_letter: usize,
+        dictionary_base: Option<usize>,
+        keep_unrecognized: bool,
+    ) -> Result<(), VoxamError> {
         let limit = self.memory.read_byte(parse_buffer)?;
 
         if limit < MINIMUM_PARSE_WORDS {
@@ -1873,7 +2425,7 @@ impl Machine {
         }
 
         let entries: Vec<(usize, usize, usize)> = {
-            let dictionary = Dictionary::new(&self.memory, None)?;
+            let dictionary = Dictionary::new(&self.memory, dictionary_base)?;
             let words = tokenize(line, dictionary.separators());
 
             words
@@ -1893,10 +2445,13 @@ impl Machine {
         let mut block = parse_buffer + WORD_SIZE;
 
         for (address, length, offset) in entries {
-            self.memory.write_word(block, address as u16)?;
-            self.memory.write_byte(block + 2, length as u8)?;
-            self.memory
-                .write_byte(block + 3, (offset + first_letter) as u8)?;
+            if address != 0 || !keep_unrecognized {
+                self.memory.write_word(block, address as u16)?;
+                self.memory.write_byte(block + 2, length as u8)?;
+                self.memory
+                    .write_byte(block + 3, (offset + first_letter) as u8)?;
+            }
+
             block += 4;
         }
 

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use voxam_core::format::{StoryFormat, sniff};
-use voxam_core::frontend::PlainFrontend;
+use voxam_core::frontend::plain;
 use voxam_core::zmachine::machine::{Identity, Machine, RunState};
 use voxam_core::zmachine::story::Story;
 
@@ -85,7 +85,7 @@ fn accepted_session(script_path: &str) -> ExitCode {
         let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
         let mut machine = Machine::new(
             story,
-            Box::new(WatchedStream { seen: seen.clone() }),
+            Box::new(watched_stream(seen.clone())),
             script.seed,
             Identity::default(),
         )?;
@@ -187,7 +187,7 @@ fn play(path: &str, seed: Option<u32>) -> ExitCode {
     }
 
     let session = Story::new(bytes)
-        .and_then(|story| Machine::new(story, Box::new(PlainFrontend), seed, Identity::default()))
+        .and_then(|story| Machine::new(story, Box::new(plain()), seed, Identity::default()))
         .and_then(|mut machine| {
             let stdin = std::io::stdin();
             let mut lines = stdin.lock().lines();
@@ -275,16 +275,14 @@ fn header_report(path: &str) -> ExitCode {
 
 /// The plain stream with the refusal watch's ear: everything
 /// prints onward and is kept for judging the response.
-struct WatchedStream {
+fn watched_stream(
     seen: std::rc::Rc<std::cell::RefCell<String>>,
-}
-
-impl voxam_core::frontend::Frontend for WatchedStream {
-    fn write(&mut self, text: &str) {
+) -> voxam_core::frontend::StreamFrontend<impl FnMut(&str)> {
+    voxam_core::frontend::StreamFrontend::new(move |text: &str| {
         print!("{text}");
         let _ = std::io::stdout().flush();
-        self.seen.borrow_mut().push_str(text);
-    }
+        seen.borrow_mut().push_str(text);
+    })
 }
 
 fn basename(path: &str) -> String {
