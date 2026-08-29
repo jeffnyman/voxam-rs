@@ -740,6 +740,36 @@ fn the_grid_comes_and_goes_with_new_names() {
     );
 }
 
+// An arrange that grows the display leaves the grid at its boot
+// width: the model keeps its size until a reload boots a machine
+// at the new one (§8.4), and the wider face never reads past the
+// model's edge -- the desktop shell's Measure menu found the
+// reference falling over exactly there.
+#[test]
+fn a_grown_arrange_keeps_the_boot_grid() {
+    let mut session = opened(AREAD, 5);
+
+    front(&session).split_window(1);
+    session.machine().run().unwrap();
+    session.render(false).unwrap();
+
+    let verdict = session
+        .accept(&parsed(
+            r#"{"type":"arrange","gen":1,"metrics":{"width":1600,"height":900,"gridcharwidth":10,"gridcharheight":20}}"#,
+        ))
+        .unwrap();
+
+    assert_eq!(verdict, Verdict::Stand);
+
+    let update = session.render(false).unwrap();
+    let grid = entry(&items(at(&update, "windows"))[1]);
+
+    // The box grows with the display; the cells stay the boot
+    // grid's 80.
+    assert_eq!(int_of(at(grid, "width")), 1600);
+    assert_eq!(int_of(at(grid, "gridwidth")), 160);
+}
+
 // The grid's box carries the display's interior margins on top of
 // its rows (GlkOte: The Metrics Object) -- a box of bare rows
 // clips its bottom and floats the buffer up into the status line
