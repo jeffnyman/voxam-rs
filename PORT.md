@@ -113,6 +113,40 @@ Milestones 1–4 are mechanical translation with a safety net.
 Milestone 6 is the largest rewrite. Milestone 7 is new work the
 Python implementation never had.
 
+## What the sidecar carries
+
+The `voxam:` block rides each GlkOte update stanza, and it is the
+whole of the interpreter's contribution to the deluxe features:
+a dumb factual feed, with every ounce of graph, layout, and
+rendering intelligence living in the face. Surveying prior art
+confirmed that this small tuple is sufficient for a working
+automapper, and taught one addition. The schema, when milestone 5
+designs it:
+
+- **The location**: object id and printed name. Per-machine
+  honesty rules here — the Z-machine's global 0 is guaranteed
+  only through v3 and conventional after, and Glulx has no fixed
+  location global at all — so the fields are optional and honest
+  rather than uniformly pretended, and the mapper degrades
+  gracefully when location is unknowable.
+- **The moving command, as delivered.** The wire layer knows the
+  line it handed the machine — scripted input included — which
+  beats any face-side memory of what was typed.
+- **Score and turns**, as already planned.
+- **A discontinuity flag**: this update does not follow causally
+  from the last command. The machines all know when an undo,
+  restore, restart, or death intervened; one honest bit here
+  spares every face the transcript-grepping heuristics earlier
+  automappers needed, and the mapper never draws a phantom edge
+  across time travel.
+
+And a boundary: no direction-parsing or graph state in
+`voxam-core`. Reading a typed command for its compass word is an
+English-only, typed-input-only heuristic — fine as a face's
+choice, poisonous as a core assumption. Persisted map layouts key
+by IFID, per milestone 7's standing plan, which is part of why
+the Babel identities work eventually matters.
+
 ## Departures the port has recorded
 
 Each is a documented translation, never a behaviour change; the
