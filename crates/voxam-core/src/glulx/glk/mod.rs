@@ -23,6 +23,7 @@
 pub mod api;
 pub mod dispatch;
 pub mod frontend;
+pub mod glkote;
 pub mod objects;
 pub mod resources;
 pub mod stdio;

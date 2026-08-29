@@ -264,6 +264,13 @@ impl Machine {
 
     /// The installed Glk library, for a host that renders and
     /// delivers.
+    pub fn glk_and_memory_mut(&mut self) -> Option<(&mut Glk, &mut Memory)> {
+        let bridge = self.bridge.as_mut()?;
+
+        Some((&mut bridge.library, &mut self.memory))
+    }
+
+    /// The installed library, or None without one.
     pub fn glk_mut(&mut self) -> Option<&mut Glk> {
         self.bridge.as_mut().map(|bridge| &mut bridge.library)
     }

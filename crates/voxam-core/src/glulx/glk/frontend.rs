@@ -23,7 +23,7 @@
 //! carries the raised events back to the select loop directly.
 
 use crate::glulx::glk::objects::{CHARACTER_CELL, Event, Metrics, SoundChannel, Window, WindowMap};
-use crate::glulx::glk::resources::ImageInfo;
+use crate::glulx::glk::resources::{ImageInfo, Resources};
 
 /// A display's answer to an input ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,7 +150,10 @@ pub trait Frontend {
     // never asked, because the Graphics gestalt reports zero and
     // graphics windows refuse to open.
 
-    /// Draw a picture; return whether it was drawn.
+    /// Draw a picture; return whether it was drawn. The hyperlink
+    /// is the window stream's current link value, so a picture
+    /// drawn under a link stays clickable in a display that lays
+    /// text around it (Glk: Graphics in Text Buffer Windows).
     #[allow(clippy::too_many_arguments)] // the drawing call's own shape
     fn draw_image(
         &mut self,
@@ -161,62 +164,95 @@ pub trait Frontend {
         val2: i64,
         width: u32,
         height: u32,
+        hyperlink: u32,
     ) -> bool {
-        let _ = (windows, window, image, val1, val2, width, height);
+        let _ = (windows, window, image, val1, val2, width, height, hyperlink);
 
         false
     }
 
     /// Erase a rectangle to the background (Glk: Graphics in
     /// Graphics Windows).
-    fn erase_rect(&mut self, window: u32, left: i64, top: i64, width: u32, height: u32) {
-        let _ = (window, left, top, width, height);
+    fn erase_rect(
+        &mut self,
+        windows: &mut WindowMap,
+        window: u32,
+        left: i64,
+        top: i64,
+        width: u32,
+        height: u32,
+    ) {
+        let _ = (windows, window, left, top, width, height);
     }
 
     /// Fill a rectangle with a color.
-    fn fill_rect(&mut self, window: u32, color: u32, left: i64, top: i64, width: u32, height: u32) {
-        let _ = (window, color, left, top, width, height);
+    #[allow(clippy::too_many_arguments)] // the fill call's own shape
+    fn fill_rect(
+        &mut self,
+        windows: &mut WindowMap,
+        window: u32,
+        color: u32,
+        left: i64,
+        top: i64,
+        width: u32,
+        height: u32,
+    ) {
+        let _ = (windows, window, color, left, top, width, height);
     }
 
     /// Set the color future clears fill with.
-    fn set_background_color(&mut self, window: u32, color: u32) {
-        let _ = (window, color);
+    fn set_background_color(&mut self, windows: &mut WindowMap, window: u32, color: u32) {
+        let _ = (windows, window, color);
     }
 
     /// Break text below margin images (Glk: Graphics in Text
     /// Buffer Windows).
-    fn flow_break(&mut self, window: u32) {
-        let _ = window;
+    fn flow_break(&mut self, windows: &mut WindowMap, window: u32) {
+        let _ = (windows, window);
     }
 
     // The sound contract, equally inert without the sound flag.
+    // Each call names the channel by its arena key beside the
+    // snapshot -- the reference passes the live object, whose
+    // identity a snapshot cannot carry -- and a call that can
+    // start a play takes the resources as an argument, the
+    // state-view departure applied to sound.
 
     /// Begin playing; return whether it started.
+    #[allow(clippy::too_many_arguments)] // the play call's own shape
     fn play_sound(
         &mut self,
-        channel: &SoundChannel,
+        resources: &mut Resources,
+        channel: u32,
+        snapshot: &SoundChannel,
         sound: u32,
         repeats: u32,
         notify: u32,
     ) -> bool {
-        let _ = (channel, sound, repeats, notify);
+        let _ = (resources, channel, snapshot, sound, repeats, notify);
 
         false
     }
 
     /// Stop whatever the channel is playing.
-    fn stop_sound(&mut self, channel: &SoundChannel) {
-        let _ = channel;
+    fn stop_sound(&mut self, channel: u32, snapshot: &SoundChannel) {
+        let _ = (channel, snapshot);
     }
 
     /// Pause or resume the channel.
-    fn pause_sound(&mut self, channel: &SoundChannel, paused: bool) {
-        let _ = (channel, paused);
+    fn pause_sound(
+        &mut self,
+        resources: &mut Resources,
+        channel: u32,
+        snapshot: &SoundChannel,
+        paused: bool,
+    ) {
+        let _ = (resources, channel, snapshot, paused);
     }
 
     /// Change the channel's volume, over a duration if asked.
-    fn set_volume(&mut self, channel: &SoundChannel, volume: u32, duration: u32) {
-        let _ = (channel, volume, duration);
+    fn set_volume(&mut self, channel: u32, snapshot: &SoundChannel, volume: u32, duration: u32) {
+        let _ = (channel, snapshot, volume, duration);
     }
 
     /// Return a clicked position, or None if none can be.

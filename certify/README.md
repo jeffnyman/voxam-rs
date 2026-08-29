@@ -25,6 +25,7 @@ developing it does.
 | `aaterminal-diff.sh` | the terminal face under both implementations with the same scripted streams -- Cloak of Darkness on a written walkthrough, the other fixtures on their own input scripts -- the sessions diffed whole |
 | `page-diff.sh` | the GlkOte update builder under both implementations -- four drills through the Page, the stanzas diffed as the compact JSON the wire actually speaks, key order and escapes included |
 | `zglkote-diff.sh` | the Z wire whole: every Z acceptance recording driven through both implementations' GlkOte serving loops by the same deterministic typist (`zglkote_drive.py`), the update transcripts diffed byte for byte -- Version 6 skipped until the stage rung |
+| `gglkote-diff.sh` | the Glulx wire whole: the Glulx acceptance recordings through both GlkOte serving loops, the same typist, the transcripts diffed byte for byte |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors

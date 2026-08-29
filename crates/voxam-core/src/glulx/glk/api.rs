@@ -1438,7 +1438,10 @@ impl Glk {
 
         let snapshot = self.channels[&key].clone();
 
-        if !self.frontend.play_sound(&snapshot, sound, repeats, notify) {
+        if !self
+            .frontend
+            .play_sound(&mut self.resources, key, &snapshot, sound, repeats, notify)
+        {
             return 0;
         }
 
@@ -1489,7 +1492,7 @@ impl Glk {
         if playing {
             let snapshot = self.channels[&key].clone();
 
-            self.frontend.stop_sound(&snapshot);
+            self.frontend.stop_sound(key, &snapshot);
 
             let held = self.channels.get_mut(&key).unwrap();
 
@@ -1523,7 +1526,8 @@ impl Glk {
 
             let snapshot = self.channels[&key].clone();
 
-            self.frontend.pause_sound(&snapshot, paused);
+            self.frontend
+                .pause_sound(&mut self.resources, key, &snapshot, paused);
         }
     }
 
@@ -1550,7 +1554,7 @@ impl Glk {
 
         let snapshot = self.channels[&key].clone();
 
-        self.frontend.set_volume(&snapshot, volume, duration);
+        self.frontend.set_volume(key, &snapshot, volume, duration);
 
         if notify != 0 {
             self.post_event(Event::new(event_type::VOLUME_NOTIFY, None, 0, notify));
@@ -1928,6 +1932,15 @@ impl Glk {
             return 0;
         };
 
+        // The stream's current link value rides along, so a
+        // clickable picture stays clickable on a display that lays
+        // text around it.
+        let hyperlink = self
+            .windows
+            .get(&wkey)
+            .and_then(|held| self.streams.get(&held.stream))
+            .map_or(0, |held| held.hyperlink);
+
         u32::from(self.frontend.draw_image(
             &mut self.windows,
             wkey,
@@ -1936,6 +1949,7 @@ impl Glk {
             val2,
             width.unwrap_or(info.width),
             height.unwrap_or(info.height),
+            hyperlink,
         ))
     }
 
@@ -1943,7 +1957,7 @@ impl Glk {
     /// Buffer Windows).
     pub fn glk_window_flow_break(&mut self, window: Option<u32>) {
         if let Some(key) = window.filter(|key| self.windows.contains_key(key)) {
-            self.frontend.flow_break(key);
+            self.frontend.flow_break(&mut self.windows, key);
         }
     }
 
@@ -1958,7 +1972,8 @@ impl Glk {
         height: u32,
     ) {
         if let Some(key) = window.filter(|key| self.windows.contains_key(key)) {
-            self.frontend.erase_rect(key, left, top, width, height);
+            self.frontend
+                .erase_rect(&mut self.windows, key, left, top, width, height);
         }
     }
 
@@ -1975,14 +1990,15 @@ impl Glk {
     ) {
         if let Some(key) = window.filter(|key| self.windows.contains_key(key)) {
             self.frontend
-                .fill_rect(key, color, left, top, width, height);
+                .fill_rect(&mut self.windows, key, color, left, top, width, height);
         }
     }
 
     /// Choose the color future clears fill with.
     pub fn glk_window_set_background_color(&mut self, window: Option<u32>, color: u32) {
         if let Some(key) = window.filter(|key| self.windows.contains_key(key)) {
-            self.frontend.set_background_color(key, color);
+            self.frontend
+                .set_background_color(&mut self.windows, key, color);
         }
     }
 
@@ -3447,7 +3463,9 @@ mod tests {
 
         fn play_sound(
             &mut self,
-            _channel: &SoundChannel,
+            _resources: &mut Resources,
+            _channel: u32,
+            _snapshot: &SoundChannel,
             sound: u32,
             repeats: u32,
             notify: u32,
@@ -3460,15 +3478,27 @@ mod tests {
             self.accepts
         }
 
-        fn stop_sound(&mut self, _channel: &SoundChannel) {
+        fn stop_sound(&mut self, _channel: u32, _snapshot: &SoundChannel) {
             self.log.borrow_mut().calls.push("stop".into());
         }
 
-        fn pause_sound(&mut self, _channel: &SoundChannel, paused: bool) {
+        fn pause_sound(
+            &mut self,
+            _resources: &mut Resources,
+            _channel: u32,
+            _snapshot: &SoundChannel,
+            paused: bool,
+        ) {
             self.log.borrow_mut().calls.push(format!("pause {paused}"));
         }
 
-        fn set_volume(&mut self, _channel: &SoundChannel, volume: u32, duration: u32) {
+        fn set_volume(
+            &mut self,
+            _channel: u32,
+            _snapshot: &SoundChannel,
+            volume: u32,
+            duration: u32,
+        ) {
             self.log
                 .borrow_mut()
                 .calls
@@ -3550,6 +3580,7 @@ mod tests {
             val2: i64,
             width: u32,
             height: u32,
+            _hyperlink: u32,
         ) -> bool {
             self.log
                 .borrow_mut()
@@ -3559,7 +3590,15 @@ mod tests {
             true
         }
 
-        fn erase_rect(&mut self, _window: u32, left: i64, top: i64, width: u32, height: u32) {
+        fn erase_rect(
+            &mut self,
+            _windows: &mut WindowMap,
+            _window: u32,
+            left: i64,
+            top: i64,
+            width: u32,
+            height: u32,
+        ) {
             self.log
                 .borrow_mut()
                 .calls
@@ -3568,6 +3607,7 @@ mod tests {
 
         fn fill_rect(
             &mut self,
+            _windows: &mut WindowMap,
             _window: u32,
             color: u32,
             _left: i64,
@@ -3578,14 +3618,14 @@ mod tests {
             self.log.borrow_mut().calls.push(format!("fill {color:#x}"));
         }
 
-        fn set_background_color(&mut self, _window: u32, color: u32) {
+        fn set_background_color(&mut self, _windows: &mut WindowMap, _window: u32, color: u32) {
             self.log
                 .borrow_mut()
                 .calls
                 .push(format!("background {color:#x}"));
         }
 
-        fn flow_break(&mut self, _window: u32) {
+        fn flow_break(&mut self, _windows: &mut WindowMap, _window: u32) {
             self.log.borrow_mut().calls.push("flow".into());
         }
     }

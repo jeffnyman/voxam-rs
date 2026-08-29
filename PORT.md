@@ -192,7 +192,19 @@ sweeps prove the outputs identical across all of them.
   header re-base is asked *by the machine* after each arc op
   (`arc_rows_below` on the trait) where the reference's face
   writes memory itself — the same bytes, the borrow's way around.
-  The zglkote sweep proves the transcripts identical.
+  The zglkote sweep proves the transcripts identical. The Glulx
+  face repeats the pattern with two twists: its `render`/`accept`
+  take the library and memory as arguments (the library owns the
+  face's other handle), a file answer travels up as an `Accepted`
+  verdict for the machine bridge's parked call, and the measured
+  cells live in a small shared `Claims` cell of their own, because
+  the library re-lays its tree mid-accept and asks the frontend
+  for metrics while the face is borrowed. The Glk `Frontend` trait
+  widened for it, each a recorded-departure spelling: the drawing
+  and flow calls take the window map, `draw_image` the stream's
+  link value, and the sound calls the channel's arena key (a
+  snapshot carries no identity) plus the resources where a play
+  can start.
 - **One dependency so far**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
   purity rule, as anticipated below.
