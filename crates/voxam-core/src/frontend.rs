@@ -16,6 +16,14 @@ const UNSPLIT_AND_CLEAR: i32 = -1;
 /// every turn -- chrome; anything taller holds content.
 const STATUS_CHROME_LINES: u16 = 2;
 
+/// The §8.1.2 fonts, as set_font speaks them: zero asks for the
+/// current font, and the named ones follow.
+pub const CURRENT_FONT: u16 = 0;
+pub const NORMAL_FONT: u16 = 1;
+pub const PICTURE_FONT: u16 = 2;
+pub const GRAPHICS_FONT: u16 = 3;
+pub const COURIER_FONT: u16 = 4;
+
 /// One status line's worth of game state (§8.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {

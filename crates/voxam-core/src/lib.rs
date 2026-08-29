@@ -16,4 +16,5 @@ pub mod glkote;
 pub mod glulx;
 pub mod iff;
 pub mod saves;
+pub mod screen;
 pub mod zmachine;
