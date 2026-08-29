@@ -30,6 +30,7 @@ pub const X_CURSOR: u16 = 5;
 pub const FONT_NUMBER: u16 = 12;
 pub const FONT_SIZE: u16 = 13;
 pub const ATTRIBUTES: u16 = 14;
+pub const LINE_COUNT: u16 = 15;
 pub const COLOUR_DATA: u16 = 11;
 pub const LEFT_MARGIN: u16 = 6;
 pub const RIGHT_MARGIN: u16 = 7;

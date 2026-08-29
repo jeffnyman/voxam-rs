@@ -34,12 +34,39 @@ use crate::zmachine::routine::Routine;
 use crate::zmachine::snapshot::{FrameSnapshot, Snapshot};
 use crate::zmachine::story::Story;
 use crate::zmachine::variables::Variables;
-use crate::zmachine::windows::{self, CURRENT_WINDOW, WindowLedger, X_CURSOR, X_SIZE, Y_CURSOR};
+use crate::zmachine::windows::{
+    self, CURRENT_WINDOW, LINE_COUNT, WindowLedger, X_COORDINATE, X_CURSOR, X_SIZE, Y_COORDINATE,
+    Y_CURSOR, Y_SIZE,
+};
 use crate::zmachine::zscii::{
     Units, char_to_zscii, decode_units, extras, unit_to_zscii, units_to_string, zscii_to_units,
 };
 
 const FALSE_VALUE: u16 = 0;
+
+/// A single mouse click's §10.3.3 input code.
+pub const SINGLE_CLICK: u16 = 254;
+
+/// The loudest §9.3 volume, "full".
+pub const FULL_VOLUME: u16 = 8;
+
+// The header word naming the extension table, and the extension
+// length that carries the §10.3.2 click words.
+const HEADER_EXTENSION_WORD: usize = 0x36;
+const EXTENSION_CLICK_WORDS: u16 = 2;
+
+// The §9 sound effects: the interpreter's two bleeps, then the
+// sampled numbers; the effect operands and volume spellings of
+// §15 sound_effect.
+const FIRST_SAMPLED_SOUND: u16 = 3;
+const START_EFFECT: u16 = 2;
+const STOP_EFFECT: u16 = 3;
+const FINISH_EFFECT: u16 = 4;
+const LOUDEST_VOLUME: u16 = 255;
+const LOWEST_VOLUME: u16 = 1;
+const SOUND_REPEATS_VERSION: u8 = 5;
+const FOREVER_BYTE: u16 = 255;
+const FOREVER_REPEATS: u16 = 0;
 const TRUE_VALUE: u16 = 1;
 
 /// How many save_undo captures stack up before the oldest is
@@ -198,6 +225,35 @@ pub struct Reading {
     pub routine: u16,
 }
 
+/// Which opcode a suspended file ask serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    Save,
+    Restore,
+}
+
+/// One suspended file ask: a save or restore awaiting its path.
+///
+/// The third Z wait, shaped like the reads: the pc has not moved
+/// past the opcode and its §15 rider is still owed, so the finish
+/// parks here -- the host's answer writes or reads the file and
+/// runs the rider, while a cancel answers the opcode's own
+/// failure, which every game already speaks.
+pub struct Filing {
+    /// Which opcode stands suspended.
+    pub purpose: Purpose,
+    instruction: Instruction,
+    /// The Quetzal bytes a save carries ready to keep; None on a
+    /// restore, whose bytes are still to be found.
+    data: Option<Vec<u8>>,
+}
+
+/// What the machine stands waiting for: a read, or a file ask.
+pub enum Waiting {
+    Read(Reading),
+    File(Filing),
+}
+
 /// What one step did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -239,7 +295,12 @@ pub struct Machine {
     screen_buffering: u16,
     redirections: Vec<(usize, Units, Option<usize>)>,
     undo: VecDeque<Snapshot>,
-    waiting: Option<Reading>,
+    waiting: Option<Waiting>,
+    /// The end-of-sound routine of the sound now playing, and
+    /// whether a sound has started since the last keyboard input
+    /// -- The Lurking Horror's §9 pacing ledger.
+    sound_routine: u16,
+    sound_since_input: bool,
     /// The keystroke queue: read_char spends one scripted line a
     /// character at a time (§15 read_char).
     pending_keys: VecDeque<char>,
@@ -300,6 +361,8 @@ impl Machine {
             waiting: None,
             pending_keys: VecDeque::new(),
             typist_ready: None,
+            sound_routine: 0,
+            sound_since_input: false,
             passed_reserved: HashSet::new(),
         };
 
@@ -380,13 +443,19 @@ impl Machine {
                     // outright (§11.1.4, §9.1.1).
                     declare::character_graphics(&mut self.memory, false)?;
                     declare::menus(&mut self.memory, false)?;
-                    declare::pictures(&mut self.memory, false)?;
+                    declare::pictures(&mut self.memory, self.frontend.has_pictures())?;
                     declare::sound_presence(&mut self.memory, self.frontend.has_sounds())?;
                 } else {
                     declare::character_graphics(
                         &mut self.memory,
                         self.frontend.has_character_graphics(),
                     )?;
+                    // The arc_image band's capability: Flags 1's
+                    // picture bit, claimed in Versions 5, 7, and 8
+                    // by a display that can hang the band -- and
+                    // re-stamped here after restart and restore,
+                    // as the contract asks (arc_image: part A).
+                    declare::pictures(&mut self.memory, self.frontend.has_arc_images())?;
                 }
             }
         }
@@ -435,7 +504,7 @@ impl Machine {
     }
 
     /// The suspended read a host must answer, if any.
-    pub fn waiting(&self) -> Option<&Reading> {
+    pub fn waiting(&self) -> Option<&Waiting> {
         self.waiting.as_ref()
     }
 
@@ -453,6 +522,8 @@ impl Machine {
             if self.step()? == Step::Suspended {
                 return Ok(RunState::Waiting);
             }
+
+            self.poll_sound()?;
         }
 
         Ok(RunState::Halted)
@@ -475,10 +546,15 @@ impl Machine {
     /// key alone, and a longer line queues its characters to be
     /// typed one read_char at a time.
     pub fn deliver_line(&mut self, line: &str, terminator: u16) -> Result<(), VoxamError> {
-        let Some(waiting) = self.waiting.take() else {
-            return Err(instruction_error(
-                "a line arrived with no read suspended to receive it".into(),
-            ));
+        let waiting = match self.waiting.take() {
+            Some(Waiting::Read(waiting)) => waiting,
+            held => {
+                self.waiting = held;
+
+                return Err(instruction_error(
+                    "a line arrived with no read suspended to receive it".into(),
+                ));
+            }
         };
 
         if waiting.wants == Wants::Key {
@@ -496,7 +572,7 @@ impl Machine {
         }
 
         if terminator != 0 && !waiting.terminators.contains(&terminator) {
-            self.waiting = Some(waiting);
+            self.waiting = Some(Waiting::Read(waiting));
 
             return Err(instruction_error(format!(
                 "a line ended by code {terminator}, which the read's terminating \
@@ -505,6 +581,180 @@ impl Machine {
         }
 
         self.landed_line(&waiting, line, terminator)
+    }
+
+    /// Complete a suspended keystroke read, if ZSCII can spell it.
+    ///
+    /// A key ZSCII has no code for is a key the story cannot hear
+    /// (§3.8): the wait stands for the next one, exactly the
+    /// blocking loop's shrug, and false says so.
+    pub fn deliver_key(&mut self, key: char) -> Result<bool, VoxamError> {
+        if !matches!(&self.waiting, Some(Waiting::Read(held)) if held.wants == Wants::Key) {
+            return Err(instruction_error(
+                "a key arrived with no key read suspended to receive it".into(),
+            ));
+        }
+
+        let repertoire = extras(&self.memory)?;
+        let Ok(code) = char_to_zscii(key, &repertoire) else {
+            return Ok(false);
+        };
+
+        let Some(Waiting::Read(waiting)) = self.waiting.take() else {
+            unreachable!("checked above");
+        };
+
+        self.landed_key(&waiting.instruction, code)?;
+
+        Ok(true)
+    }
+
+    /// Complete a suspended read with a mouse click, if it hears
+    /// one.
+    ///
+    /// §10.3.3: a click is the keyboard code 254, so a keystroke
+    /// read takes it the way it takes any key; a line read ends
+    /// early only when its §10.5.2.1 table names the click code,
+    /// taking the text composed so far as the typed line. Either
+    /// way the click's position lands in header extension words 1
+    /// and 2 first (§10.3.2), at (1,1) in the top corner. A read
+    /// that cannot hear a click leaves the wait standing, and
+    /// false says so -- the blocking editor's shrug, suspended.
+    pub fn deliver_click(&mut self, x: u16, y: u16, text: &str) -> Result<bool, VoxamError> {
+        let Some(Waiting::Read(held)) = &self.waiting else {
+            return Err(instruction_error(
+                "a click arrived with no read suspended to receive it".into(),
+            ));
+        };
+
+        if held.wants == Wants::Line && !held.terminators.contains(&SINGLE_CLICK) {
+            return Ok(false);
+        }
+
+        self.note_click(x, y)?;
+
+        let Some(Waiting::Read(waiting)) = self.waiting.take() else {
+            unreachable!("checked above");
+        };
+
+        if waiting.wants == Wants::Key {
+            self.landed_key(&waiting.instruction, SINGLE_CLICK)?;
+
+            return Ok(true);
+        }
+
+        self.landed_line(&waiting, text, SINGLE_CLICK)?;
+
+        Ok(true)
+    }
+
+    /// Complete a suspended save or restore with the player's path.
+    ///
+    /// The prompt's name is the player's own: an absolute path is
+    /// honored whole, a relative one lands where the session runs,
+    /// and a bare one gains the .sav suffix as a courtesy. A
+    /// cancel -- None -- answers the opcode's own §15 failure,
+    /// which every game already speaks; a restore that succeeds
+    /// does not continue here at all, resuming at its save's rider
+    /// (§15 save, Quetzal §5.8).
+    pub fn deliver_file(&mut self, name: Option<&str>) -> Result<(), VoxamError> {
+        let filing = match self.waiting.take() {
+            Some(Waiting::File(filing)) => filing,
+            held => {
+                self.waiting = held;
+
+                return Err(instruction_error(
+                    "a file arrived with no save or restore suspended to receive it".into(),
+                ));
+            }
+        };
+
+        let path = name.filter(|told| !told.is_empty()).map(|told| {
+            let path = std::path::PathBuf::from(told);
+
+            if path.extension().is_none() {
+                path.with_extension("sav")
+            } else {
+                path
+            }
+        });
+
+        if filing.purpose == Purpose::Save {
+            let success = match (path, &filing.data) {
+                (Some(path), Some(data)) => crate::saves::FileSaveSlot { path }.write(data),
+                _ => false,
+            };
+
+            return self.save_rider(&filing.instruction, success);
+        }
+
+        let data = path.and_then(|path| crate::saves::FileSaveSlot { path }.read());
+        let snapshot =
+            data.and_then(|bytes| crate::zmachine::quetzal::read(&bytes, &self.story).ok());
+
+        let Some(snapshot) = snapshot else {
+            if self.memory.header().version() > BRANCHING_SAVE_FINAL_VERSION {
+                self.store_result(filing.instruction.store_variable, FALSE_VALUE)?;
+            }
+
+            self.pc = filing.instruction.next_address;
+
+            return Ok(());
+        };
+
+        self.restore(&snapshot)?;
+        self.resume_from_save(snapshot.pc)
+    }
+
+    /// Fire a timed read's §15 interrupt routine, mid-wait.
+    ///
+    /// The nested step loop returns to the pc it left, so the read
+    /// still stands unless the routine asked otherwise: a true
+    /// return -- a quit along the way included -- erases the input
+    /// and ends the read the interrupt way.
+    pub fn deliver_tick(&mut self) -> Result<(), VoxamError> {
+        let routine = match &self.waiting {
+            Some(Waiting::Read(held)) if held.routine != 0 => held.routine,
+            _ => {
+                return Err(instruction_error(
+                    "a tick arrived with no timed read suspended to hear it".into(),
+                ));
+            }
+        };
+
+        if self.interrupt(routine)? != 0 {
+            let Some(Waiting::Read(waiting)) = self.waiting.take() else {
+                unreachable!("checked above");
+            };
+
+            if waiting.wants == Wants::Line {
+                self.abandoned_line(
+                    &waiting.instruction,
+                    waiting.text_buffer,
+                    waiting.parse_buffer,
+                    waiting.counted,
+                )?;
+            } else {
+                self.abandoned_key(&waiting.instruction)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Record a click's position in header extension words 1 and 2
+    /// -- only when the story provides an extension that large
+    /// (§10.3.2): a story without one still hears the click, it
+    /// just cannot ask where.
+    fn note_click(&mut self, x: u16, y: u16) -> Result<(), VoxamError> {
+        let extension = usize::from(self.memory.read_word(HEADER_EXTENSION_WORD)?);
+
+        if extension != 0 && self.memory.read_word(extension)? >= EXTENSION_CLICK_WORDS {
+            self.memory.write_word(extension + 2, x)?;
+            self.memory.write_word(extension + 4, y)?;
+        }
+
+        Ok(())
     }
 
     /// Resolve an operand to a value, reading variables (§4.2.2).
@@ -660,8 +910,8 @@ impl Machine {
             "output_stream" => ran(self.op_output_stream(instruction)),
             "input_stream" => ran(self.op_input_stream(instruction)),
             "scan_table" => ran(self.op_scan_table(instruction)),
-            "save" => ran(self.op_save(instruction)),
-            "restore" => ran(self.op_restore(instruction)),
+            "save" => self.op_save(instruction),
+            "restore" => self.op_restore(instruction),
             "save_undo" => ran(self.op_save_undo(instruction)),
             "restore_undo" => ran(self.op_restore_undo(instruction)),
             "restart" => ran(self.op_restart()),
@@ -692,7 +942,10 @@ impl Machine {
             "buffer_screen" => ran(self.op_buffer_screen(instruction)),
             "push_stack" => ran(self.op_push_stack(instruction)),
             "pop_stack" => ran(self.op_pop_stack(instruction)),
-            "draw_picture" | "erase_picture" | "picture_table" | "mouse_window" | "draw_image" => {
+            "draw_picture" => ran(self.op_draw_picture(instruction, true)),
+            "erase_picture" => ran(self.op_draw_picture(instruction, false)),
+            "draw_image" => ran(self.op_draw_image(instruction)),
+            "picture_table" | "mouse_window" => {
                 // Presentation a frontend without pictures or a
                 // mouse lets pass in the conforming quiet; the
                 // operands were already spelled by their own types.
@@ -700,7 +953,8 @@ impl Machine {
                 self.pc = instruction.next_address;
                 Ok(Step::Ran)
             }
-            "set_colour" | "set_true_colour" => {
+            "set_colour" => ran(self.op_set_colour(instruction)),
+            "set_true_colour" => {
                 // A frontend that truthfully declared no colours
                 // makes the request a legitimate no-op (§8.3.1).
                 self.pc = instruction.next_address;
@@ -1500,11 +1754,96 @@ impl Machine {
         let values = self.values(instruction)?;
         let number = values.first().copied().unwrap_or(1);
 
-        if number <= 2 {
+        if (1..FIRST_SAMPLED_SOUND).contains(&number) {
             self.frontend.bleep(number == 1);
+        } else if self.frontend.has_sounds() {
+            self.sampled_sound(number, &values)?;
         }
 
         self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Drive one sampled-sound effect through the frontend (§9.4).
+    ///
+    /// The §9 remarks name The Lurking Horror's own bugs, and
+    /// those are the pardons here: an effect outside the four
+    /// passes quietly, a number no resource answers starts nothing
+    /// and keeps any current sound playing, and an oversized
+    /// volume clamps to §9.3's 8. The remarks also set the pacing:
+    /// a new sound, started while one begun since the last
+    /// keyboard input still plays, waits for that one to finish a
+    /// cycle first.
+    fn sampled_sound(&mut self, number: u16, values: &[u16]) -> Result<(), VoxamError> {
+        let effect = values.get(1).copied().unwrap_or(START_EFFECT);
+
+        if effect == STOP_EFFECT || effect == FINISH_EFFECT {
+            self.frontend
+                .stop_sound(if number != 0 { Some(number) } else { None });
+
+            return Ok(());
+        }
+
+        if effect != START_EFFECT {
+            // Prepare asks for nothing here -- every sound is
+            // already decoded (§9.4.1) -- and any other effect is
+            // the pardoned bug above.
+            return Ok(());
+        }
+
+        let word = values.get(2).copied().unwrap_or(LOUDEST_VOLUME);
+        let volume = if word & 0xFF == LOUDEST_VOLUME {
+            // 255 is "loudest possible" (§9.3, §15 sound_effect).
+            FULL_VOLUME
+        } else {
+            (word & 0xFF).clamp(LOWEST_VOLUME, FULL_VOLUME)
+        };
+
+        let repeats = if self.memory.header().version() >= SOUND_REPEATS_VERSION {
+            let high = word >> 8;
+
+            // 255 repeats until stopped; zero is illegal here, and
+            // §15's own suggestion is to read it as once.
+            Some(if high == FOREVER_BYTE {
+                FOREVER_REPEATS
+            } else {
+                high.max(1)
+            })
+        } else {
+            // Version 3 cannot say -- §15 keeps the high byte 0 --
+            // so None lets the Blorb's Loop chunk decide.
+            None
+        };
+
+        if self.sound_since_input && self.frontend.sound_playing() {
+            self.frontend.wait_for_sound();
+        }
+
+        let routine = values.get(3).copied().unwrap_or(0);
+
+        if self.frontend.play_sound(number, volume, repeats) {
+            self.sound_routine = routine;
+            self.sound_since_input = true;
+        }
+
+        Ok(())
+    }
+
+    /// Fire the end-of-sound routine of a sound that just ended.
+    ///
+    /// The routine runs only after the sound has played its
+    /// requested number of times -- the frontend's finished
+    /// answers exactly that, once -- and never for a sound stopped
+    /// or replaced (§9.4.4). The result is discarded: an
+    /// end-of-sound routine is not a §15 read interrupt, and
+    /// terminates nothing.
+    pub fn poll_sound(&mut self) -> Result<(), VoxamError> {
+        if self.sound_routine != 0 && self.frontend.sound_finished() {
+            let routine = std::mem::take(&mut self.sound_routine);
+
+            self.interrupt(routine)?;
+        }
 
         Ok(())
     }
@@ -1749,7 +2088,7 @@ impl Machine {
     /// Save the state of play (§15 save): this session carries no
     /// save slot yet, so every save reports failure -- an answer
     /// the story already knows how to hear.
-    fn op_save(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+    fn op_save(&mut self, instruction: &Instruction) -> Result<Step, VoxamError> {
         if !instruction.operands.is_empty() {
             return Err(unimplemented(
                 "the auxiliary-table save",
@@ -1767,12 +2106,28 @@ impl Machine {
         };
         let data = crate::zmachine::quetzal::write(&snapshot, &self.story)?;
 
+        // A display that cannot block asks through its own file
+        // prompt: the finish parks, and the host's answer lands
+        // through deliver_file -- the same standing-down the reads
+        // learned (§15 save).
+        if self.frontend.suspends() {
+            self.waiting = Some(Waiting::File(Filing {
+                purpose: Purpose::Save,
+                instruction: instruction.clone(),
+                data: Some(data),
+            }));
+
+            return Ok(Step::Suspended);
+        }
+
         let success = match &mut self.saves {
             Some(slot) => slot.write(&data),
             None => false,
         };
 
-        self.save_rider(instruction, success)
+        self.save_rider(instruction, success)?;
+
+        Ok(Step::Ran)
     }
 
     /// Answer a save the §15 way: a branch through Version 3, a
@@ -1795,12 +2150,24 @@ impl Machine {
     /// Version 3, a stored 0 from Version 4 -- whether the slot
     /// was empty, the bytes were not a save, or the save names
     /// another game.
-    fn op_restore(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+    fn op_restore(&mut self, instruction: &Instruction) -> Result<Step, VoxamError> {
         if !instruction.operands.is_empty() {
             return Err(unimplemented(
                 "the auxiliary-table restore",
                 instruction.address,
             ));
+        }
+
+        // The restore stands down for its file the way the save
+        // does; the bytes are still to be found (§15 restore).
+        if self.frontend.suspends() {
+            self.waiting = Some(Waiting::File(Filing {
+                purpose: Purpose::Restore,
+                instruction: instruction.clone(),
+                data: None,
+            }));
+
+            return Ok(Step::Suspended);
         }
 
         let data = match &mut self.saves {
@@ -1818,11 +2185,13 @@ impl Machine {
 
             self.pc = instruction.next_address;
 
-            return Ok(());
+            return Ok(Step::Ran);
         };
 
         self.restore(&snapshot)?;
-        self.resume_from_save(snapshot.pc)
+        self.resume_from_save(snapshot.pc)?;
+
+        Ok(Step::Ran)
     }
 
     /// Save the state of play into the interpreter's hand (§15):
@@ -2309,7 +2678,24 @@ impl Machine {
 
         self.windows
             .r#move(i32::from(values[0]), values[1], values[2])?;
+        self.place_staged(i32::from(values[0]))?;
         self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Send a window's ledger geometry to a staged frontend.
+    fn place_staged(&mut self, window: i32) -> Result<(), VoxamError> {
+        if self.frontend.has_stage() {
+            let resolved = self.windows.resolve(window)?;
+            let line = self.windows.property(window, Y_COORDINATE)?;
+            let column = self.windows.property(window, X_COORDINATE)?;
+            let height = self.windows.property(window, Y_SIZE)?;
+            let width = self.windows.property(window, X_SIZE)?;
+
+            self.frontend
+                .place_window(resolved, line, column, height, width);
+        }
 
         Ok(())
     }
@@ -2321,6 +2707,7 @@ impl Machine {
 
         self.windows
             .resize(i32::from(values[0]), values[1], values[2])?;
+        self.place_staged(i32::from(values[0]))?;
         self.pc = instruction.next_address;
 
         Ok(())
@@ -2355,6 +2742,16 @@ impl Machine {
 
         self.windows
             .write_property(i32::from(values[0]), values[1], values[2])?;
+
+        // A staged frontend hears line-count writes: games set
+        // them freely to manipulate when [MORE] is printed
+        // (§8.8.3.2.6).
+        if self.frontend.has_stage() && values[1] == LINE_COUNT {
+            let resolved = self.windows.resolve(i32::from(values[0]))?;
+
+            self.frontend.set_line_count(resolved, signed(values[2]));
+        }
+
         self.pc = instruction.next_address;
 
         Ok(())
@@ -2370,6 +2767,13 @@ impl Machine {
             .map_or(CURRENT_WINDOW, |value| i32::from(*value));
 
         self.windows.set_margins(window, values[0], values[1])?;
+
+        if self.frontend.has_stage() {
+            let resolved = self.windows.resolve(window)?;
+
+            self.frontend.set_margins(resolved, values[0], values[1]);
+        }
+
         self.pc = instruction.next_address;
 
         Ok(())
@@ -2379,7 +2783,14 @@ impl Machine {
     /// scroll_window): a character glass scrolls its lower window
     /// by §8.7 as text flows and has no pixels here to shift.
     fn op_scroll_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
-        self.values(instruction)?;
+        let values = self.values(instruction)?;
+
+        if self.frontend.has_stage() {
+            let resolved = self.windows.resolve(signed(values[0]))?;
+
+            self.frontend.scroll_window(resolved, signed(values[1]));
+        }
+
         self.pc = instruction.next_address;
 
         Ok(())
@@ -2443,6 +2854,26 @@ impl Machine {
         Ok(())
     }
 
+    /// Set text colours -- where coloured text is available
+    /// (§8.3.1). The spec's own conditional does the work both
+    /// ways: a frontend that claimed colours in the header
+    /// receives the pair, and one that truthfully declared none
+    /// makes the request a legitimate no-op. The pair travels
+    /// signed, so §8.3.1's colour -1 -- the pixel under the cursor
+    /// -- arrives as itself for a frontend that can sample.
+    fn op_set_colour(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        if self.frontend.has_colours() {
+            self.frontend
+                .set_colour(signed(values[0]), signed(values[1]));
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
     /// Answer the game's questions about pictures (§15
     /// picture_data): on a frontend without pictures, the census
     /// counts zero and no number is valid -- exactly what the
@@ -2453,13 +2884,101 @@ impl Machine {
         let array = usize::from(values[1]);
 
         if number == 0 {
-            self.memory.write_word(array, 0)?;
-            self.memory.write_word(array + 2, 0)?;
+            let (count, release) = self.frontend.picture_census();
 
-            return self.branch(instruction, false);
+            self.memory.write_word(array, count)?;
+            self.memory.write_word(array + 2, release)?;
+
+            return self.branch(instruction, count > 0);
         }
 
-        self.branch(instruction, false)
+        let Some((height, width)) = self.frontend.picture_data(number) else {
+            return self.branch(instruction, false);
+        };
+
+        self.memory.write_word(array, height)?;
+        self.memory.write_word(array + 2, width)?;
+        self.branch(instruction, true)
+    }
+
+    /// Draw a picture at a units position, or paint its region to
+    /// the background (§15 draw_picture, erase_picture).
+    ///
+    /// Without pictures the call passes in the conforming quiet:
+    /// Infocom's own games draw without consulting the header --
+    /// the §11.1.4 remarks name Zork Zero's Macintosh release for
+    /// it. With pictures, coordinates of zero (or omitted) mean
+    /// the current window's cursor, the given ones are relative to
+    /// the window's own origin (§8.8.3.5), and an invalid picture
+    /// number is the one thing §15 calls illegal.
+    fn op_draw_picture(
+        &mut self,
+        instruction: &Instruction,
+        drawing: bool,
+    ) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let number = values[0];
+
+        if !self.frontend.has_pictures() {
+            self.pc = instruction.next_address;
+
+            return Ok(());
+        }
+
+        if self.frontend.picture_data(number).is_none() {
+            return Err(VoxamError::ZMachineScreen(format!(
+                "picture {number} is not in the gallery, and §15 calls drawing                  an invalid picture number illegal"
+            )));
+        }
+
+        let mut line = values.get(1).copied().unwrap_or(0);
+        let mut column = values.get(2).copied().unwrap_or(0);
+
+        if line == 0 {
+            line = self.windows.property(CURRENT_WINDOW, Y_CURSOR)?;
+        }
+
+        if column == 0 {
+            column = self.windows.property(CURRENT_WINDOW, X_CURSOR)?;
+        }
+
+        line = line
+            .wrapping_add(self.windows.property(CURRENT_WINDOW, Y_COORDINATE)?)
+            .wrapping_sub(1);
+        column = column
+            .wrapping_add(self.windows.property(CURRENT_WINDOW, X_COORDINATE)?)
+            .wrapping_sub(1);
+
+        if drawing {
+            self.frontend.draw_picture(number, line, column);
+        } else {
+            self.frontend.erase_picture(number, line, column);
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Hang, replace, or clear the arc_image band (EXT:0x80).
+    ///
+    /// Two operands, no store, no branch: the picture id -- zero
+    /// clears the band -- and the mode naming its height in text
+    /// rows (arc_image: the contract, part A). A game only draws
+    /// after finding Flags 1's picture bit set, so a frontend that
+    /// never claimed the band is never asked -- and if a stray
+    /// call arrives anyway, it passes as quietly as any private
+    /// opcode, because a picture is presentation, never state.
+    fn op_draw_image(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        if self.frontend.has_arc_images() && values.len() >= 2 {
+            self.frontend.draw_arc_image(values[0], values[1]);
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
     }
 
     /// Take the display-buffering advice §8.8.7's way (§15
@@ -2591,6 +3110,29 @@ impl Machine {
 
         let (time, routine) = read_cadence(&values, version);
 
+        // A display that cannot block stands down instead: the
+        // finish parks whole, the cadence alongside, and the
+        // host's timer sends the ticks (§15 read).
+        if self.frontend.suspends() {
+            let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
+
+            self.waiting = Some(Waiting::Read(Reading {
+                wants: Wants::Line,
+                instruction: instruction.clone(),
+                text_buffer,
+                parse_buffer,
+                counted,
+                capacity,
+                preloaded,
+                held,
+                terminators: self.terminators()?,
+                time,
+                routine,
+            }));
+
+            return Ok(Step::Suspended);
+        }
+
         // The patient typist lets one interval elapse before the
         // line arrives: the routine fires once, and a true return
         // erases the input and ends the read with 0 stored (§15).
@@ -2602,7 +3144,7 @@ impl Machine {
 
         let (preloaded, held) = self.preloaded(text_buffer, capacity, counted)?;
 
-        self.waiting = Some(Reading {
+        self.waiting = Some(Waiting::Read(Reading {
             wants: Wants::Line,
             instruction: instruction.clone(),
             text_buffer,
@@ -2614,7 +3156,7 @@ impl Machine {
             terminators: self.terminators()?,
             time,
             routine,
-        });
+        }));
 
         Ok(Step::Suspended)
     }
@@ -2646,6 +3188,28 @@ impl Machine {
         let routine = values.get(2).copied().unwrap_or(0);
         let version = self.memory.header().version();
 
+        // A display that cannot block stands down at once, the
+        // cadence parked only as a pair (§15 read_char).
+        if self.frontend.suspends() {
+            let paired = time != 0 && routine != 0;
+
+            self.waiting = Some(Waiting::Read(Reading {
+                wants: Wants::Key,
+                instruction: instruction.clone(),
+                text_buffer: 0,
+                parse_buffer: 0,
+                counted: false,
+                capacity: 0,
+                preloaded: 0,
+                held: String::new(),
+                terminators: HashSet::new(),
+                time: if paired { time } else { 0 },
+                routine: if paired { routine } else { 0 },
+            }));
+
+            return Ok(Step::Suspended);
+        }
+
         let ready = !self.pending_keys.is_empty() || self.typist_ready == Some(instruction.address);
         self.typist_ready = None;
 
@@ -2670,7 +3234,7 @@ impl Machine {
             return Ok(Step::Ran);
         }
 
-        self.waiting = Some(Reading {
+        self.waiting = Some(Waiting::Read(Reading {
             wants: Wants::Key,
             instruction: instruction.clone(),
             text_buffer: 0,
@@ -2682,13 +3246,14 @@ impl Machine {
             terminators: HashSet::new(),
             time,
             routine,
-        });
+        }));
 
         Ok(Step::Suspended)
     }
 
     /// Finish a keystroke read: store the code, step past.
     fn landed_key(&mut self, instruction: &Instruction, code: u16) -> Result<(), VoxamError> {
+        self.sound_since_input = false;
         self.store_result(instruction.store_variable, code)?;
         self.pc = instruction.next_address;
 
@@ -2830,6 +3395,8 @@ impl Machine {
         raw: &str,
         terminator: u16,
     ) -> Result<(), VoxamError> {
+        self.sound_since_input = false;
+
         let instruction = &waiting.instruction;
 
         let line = if waiting.counted {

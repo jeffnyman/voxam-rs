@@ -148,6 +148,163 @@ pub trait Frontend {
     fn screen_columns(&self) -> u8 {
         80
     }
+
+    /// Whether input arrives from outside rather than from a read
+    /// call. A blocking frontend is asked and answers on the spot;
+    /// a suspending one is never asked -- a read stands down, the
+    /// machine returns to its host, and the host delivers the line
+    /// or keystroke. The same contract the Glk displays keep.
+    fn suspends(&self) -> bool {
+        false
+    }
+
+    /// Whether pictures can actually be drawn (§11.1.4) -- true
+    /// only where a gallery of art hangs behind a glass with
+    /// pixels.
+    fn has_pictures(&self) -> bool {
+        false
+    }
+
+    /// Whether the arc_image picture band can be hung above the
+    /// screen (arc_image: the contract) -- true only where the
+    /// band's pictures can be found and shown. Claimed as Flags
+    /// 1's picture bit in Versions 5, 7, and 8.
+    fn has_arc_images(&self) -> bool {
+        false
+    }
+
+    /// Whether a Version 6 session plays on a §8.8 stage of eight
+    /// placeable windows. When true, the machine forwards window
+    /// geometry and cursor moves; when false, it keeps the
+    /// character frontends' flowing mimicry -- the behaviour every
+    /// recording replays in.
+    fn has_stage(&self) -> bool {
+        false
+    }
+
+    /// The width of one character cell in the units the header
+    /// speaks -- 1 on a character glass, whose unit is a
+    /// character (§8.4.2).
+    fn font_width(&self) -> u16 {
+        1
+    }
+
+    /// The height of one character cell in units.
+    fn font_height(&self) -> u16 {
+        1
+    }
+
+    /// Change the printing colours for text that follows (§8.3.1).
+    /// Only frontends that claimed colours receive the change; the
+    /// pair travels signed, so §8.3.1's colour -1 -- the pixel
+    /// under the cursor -- arrives as itself.
+    fn set_colour(&mut self, _foreground: i32, _background: i32) {}
+
+    /// A picture's height and width in pixels, in picture_data's
+    /// own order (§15); None for every number on a frontend that
+    /// hangs no pictures.
+    fn picture_data(&self, _number: u16) -> Option<(u16, u16)> {
+        None
+    }
+
+    /// How many pictures hang, and the art's release number -- the
+    /// picture_data number-0 census (§15).
+    fn picture_census(&self) -> (u16, u16) {
+        (0, 0)
+    }
+
+    /// Draw a picture, top left at a screen units position (§15).
+    /// Only frontends that claimed pictures hear the call, with
+    /// the cursor defaults and window origin already resolved.
+    fn draw_picture(&mut self, _number: u16, _line: u16, _column: u16) {}
+
+    /// Paint a picture's region to the background colour (§15).
+    fn erase_picture(&mut self, _number: u16, _line: u16, _column: u16) {}
+
+    /// Hang, replace, or clear the arc_image band: EXT:0x80's two
+    /// operands, passed whole -- the picture id, zero taking the
+    /// band down, and the mode naming its height in text rows
+    /// (arc_image: the contract). Only frontends that claimed arc
+    /// images hear the call.
+    fn draw_arc_image(&mut self, _image: u16, _mode: u16) {}
+
+    /// Place a §8.8 window at a position and size, in units. Only
+    /// frontends that claimed a stage hear the call.
+    fn place_window(&mut self, _window: u16, _line: u16, _column: u16, _height: u16, _width: u16) {}
+
+    /// Scroll a §8.8 window's own rectangle, in units (§15):
+    /// positive scrolls up, negative down. Only frontends that
+    /// claimed a stage hear the call.
+    fn scroll_window(&mut self, _window: u16, _pixels: i32) {}
+
+    /// Set a §8.8 window's margin sizes, in units (§8.8.3.2.1).
+    /// Only frontends that claimed a stage hear the call.
+    fn set_margins(&mut self, _window: u16, _left: u16, _right: u16) {}
+
+    /// Set a §8.8 window's [MORE] line count (§8.8.3.2.6): games
+    /// manipulate it freely, and -999 means never print [MORE].
+    /// Only frontends that claimed a stage hear the call.
+    fn set_line_count(&mut self, _window: u16, _count: i32) {}
+
+    /// Start a sampled sound in the background (§9.4). The volume
+    /// runs 1 to 8 (§9.3); repeats count total plays, 0 repeating
+    /// until stopped (§9.4.3), and None plays as the resource
+    /// file's Loop chunk says -- the Version 3 case. Answers
+    /// whether a sound actually started, which decides if an
+    /// end-of-sound routine is worth keeping.
+    fn play_sound(&mut self, _number: u16, _volume: u16, _repeats: Option<u16>) -> bool {
+        false
+    }
+
+    /// Stop a sampled sound, or all of them when None (§9.4).
+    fn stop_sound(&mut self, _number: Option<u16>) {}
+
+    /// Whether a sampled sound is still sounding (§9 remarks).
+    fn sound_playing(&self) -> bool {
+        false
+    }
+
+    /// Whether a sound just ended of its own accord (§9.4.4): true
+    /// once per natural ending, and never for a sound stopped or
+    /// replaced.
+    fn sound_finished(&mut self) -> bool {
+        false
+    }
+
+    /// Block until the playing sound finishes a cycle -- the §9
+    /// remarks' pacing rule for The Lurking Horror.
+    fn wait_for_sound(&mut self) {}
+}
+
+/// The arc_image contract's fixed facts, shared by every face that
+/// hangs the band: the two modes by their text-row names, the
+/// reference width the masters are painted at, and the pixel rows
+/// each mode row stands for (arc_image: the contract, part A).
+pub const ARC_MODES: [u16; 2] = [9, 12];
+pub const ARC_REFERENCE_WIDTH: u16 = 320;
+pub const ARC_PIXEL_ROWS: u16 = 8;
+
+/// The §8.3.1 colour codes as RGB, shared by every face that shows
+/// real ink: 2 to 9 are the classic eight, and the greys at 10 to
+/// 12 are the Version 6 additions, their values scaled from the
+/// spec's own true-colour equivalents (§8.3.7). Codes 0 and 1 --
+/// "no change" and "the interpreter's default" -- deliberately
+/// answer None: the default is each face's own affair.
+pub fn colour_value(code: i32) -> Option<(u8, u8, u8)> {
+    match code {
+        2 => Some((0, 0, 0)),
+        3 => Some((204, 0, 0)),
+        4 => Some((0, 204, 0)),
+        5 => Some((204, 204, 0)),
+        6 => Some((0, 0, 204)),
+        7 => Some((204, 0, 204)),
+        8 => Some((0, 204, 204)),
+        9 => Some((255, 255, 255)),
+        10 => Some((181, 181, 181)),
+        11 => Some((139, 139, 139)),
+        12 => Some((90, 90, 90)),
+        _ => None,
+    }
 }
 
 /// A dumb-terminal presentation: one unadorned stream of text.
