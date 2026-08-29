@@ -34,6 +34,7 @@ use crate::zmachine::routine::Routine;
 use crate::zmachine::snapshot::{FrameSnapshot, Snapshot};
 use crate::zmachine::story::Story;
 use crate::zmachine::variables::Variables;
+use crate::zmachine::windows::{self, CURRENT_WINDOW, WindowLedger, X_CURSOR, X_SIZE, Y_CURSOR};
 use crate::zmachine::zscii::{
     Units, char_to_zscii, decode_units, extras, unit_to_zscii, units_to_string, zscii_to_units,
 };
@@ -234,7 +235,9 @@ pub struct Machine {
     font: u16,
     recording_commands: bool,
     file_input: bool,
-    redirections: Vec<(usize, Units)>,
+    windows: WindowLedger,
+    screen_buffering: u16,
+    redirections: Vec<(usize, Units, Option<usize>)>,
     undo: VecDeque<Snapshot>,
     waiting: Option<Reading>,
     /// The keystroke queue: read_char spends one scripted line a
@@ -263,6 +266,8 @@ impl Machine {
         let memory = Memory::new(&story)?;
         let variables = Variables::new(&memory);
         let objects = ObjectTable::new(&memory);
+        let frontend_lines = frontend.screen_lines();
+        let frontend_columns = frontend.screen_columns();
 
         let mut machine = Self {
             story,
@@ -281,6 +286,15 @@ impl Machine {
             font: NORMAL_FONT,
             recording_commands: false,
             file_input: false,
+            windows: WindowLedger::new(
+                u16::from(frontend_lines),
+                u16::from(frontend_columns),
+                u16::from(DEFAULT_FOREGROUND_COLOUR),
+                u16::from(DEFAULT_BACKGROUND_COLOUR),
+                1,
+                1,
+            ),
+            screen_buffering: 0,
             redirections: Vec::new(),
             undo: VecDeque::new(),
             waiting: None,
@@ -297,13 +311,19 @@ impl Machine {
 
     /// Point the machine at its first instruction (§5.4, §5.5).
     fn start_execution(&mut self) -> Result<(), VoxamError> {
-        let header = self.memory.header();
+        if self.memory.header().version() == 6 {
+            // Version 6 instead calls the main routine (§5.4).
+            let packed = self.memory.header().main_routine_packed_address()?;
+            let address = routine_address(&self.memory.header(), packed)?;
+            let routine = Routine::parse(&self.memory, address)?;
 
-        if header.version() == 6 {
-            return Err(unimplemented("the version 6 main-routine boot", 0));
+            self.calls.call(&routine, &[], 0, None)?;
+            self.pc = routine.first_instruction;
+
+            return Ok(());
         }
 
-        self.pc = usize::from(header.initial_program_counter()?);
+        self.pc = usize::from(self.memory.header().initial_program_counter()?);
 
         Ok(())
     }
@@ -351,10 +371,23 @@ impl Machine {
                     DEFAULT_BACKGROUND_COLOUR,
                 )?;
                 declare::mouse(&mut self.memory, self.frontend.has_mouse())?;
-                declare::character_graphics(
-                    &mut self.memory,
-                    self.frontend.has_character_graphics(),
-                )?;
+
+                if version == 6 {
+                    // In Version 6, Flags 2 bit 3 asks for pictures
+                    // rather than the §16 font (§11.1); the menu
+                    // request falls unanswered (§11.1.2). Flags 1
+                    // declares picture and sound availability
+                    // outright (§11.1.4, §9.1.1).
+                    declare::character_graphics(&mut self.memory, false)?;
+                    declare::menus(&mut self.memory, false)?;
+                    declare::pictures(&mut self.memory, false)?;
+                    declare::sound_presence(&mut self.memory, self.frontend.has_sounds())?;
+                } else {
+                    declare::character_graphics(
+                        &mut self.memory,
+                        self.frontend.has_character_graphics(),
+                    )?;
+                }
             }
         }
 
@@ -524,7 +557,7 @@ impl Machine {
     /// where surrogate halves fuse into their astral characters:
     /// stream 3 keeps the raw 16-bit units a game may read back.
     fn print_units(&mut self, units: &[u16]) -> Result<(), VoxamError> {
-        if let Some((_, buffer)) = self.redirections.last_mut() {
+        if let Some((_, buffer, _)) = self.redirections.last_mut() {
             buffer.extend_from_slice(units);
 
             return Ok(());
@@ -645,6 +678,28 @@ impl Machine {
             "copy_table" => ran(self.op_copy_table(instruction)),
             "tokenise" => ran(self.op_tokenise(instruction)),
             "encode_text" => ran(self.op_encode_text(instruction)),
+            "move_window" => ran(self.op_move_window(instruction)),
+            "window_size" => ran(self.op_window_size(instruction)),
+            "window_style" => ran(self.op_window_style(instruction)),
+            "get_wind_prop" => ran(self.op_get_wind_prop(instruction)),
+            "put_wind_prop" => ran(self.op_put_wind_prop(instruction)),
+            "set_margins" => ran(self.op_set_margins(instruction)),
+            "scroll_window" => ran(self.op_scroll_window(instruction)),
+            "read_mouse" => ran(self.op_read_mouse(instruction)),
+            "make_menu" => ran(self.op_make_menu(instruction)),
+            "print_form" => ran(self.op_print_form(instruction)),
+            "picture_data" => ran(self.op_picture_data(instruction)),
+            "buffer_screen" => ran(self.op_buffer_screen(instruction)),
+            "push_stack" => ran(self.op_push_stack(instruction)),
+            "pop_stack" => ran(self.op_pop_stack(instruction)),
+            "draw_picture" | "erase_picture" | "picture_table" | "mouse_window" | "draw_image" => {
+                // Presentation a frontend without pictures or a
+                // mouse lets pass in the conforming quiet; the
+                // operands were already spelled by their own types.
+                self.values(instruction)?;
+                self.pc = instruction.next_address;
+                Ok(Step::Ran)
+            }
             "set_colour" | "set_true_colour" => {
                 // A frontend that truthfully declared no colours
                 // makes the request a legitimate no-op (§8.3.1).
@@ -1019,7 +1074,23 @@ impl Machine {
     /// Version 6 user-stack form waits with the rest of Version 6.
     fn op_pull(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         if instruction.opcode.stores {
-            return Err(unimplemented("the version 6 pull", instruction.address));
+            // Version 6 turns the opcode around: it stores its
+            // result, and an operand names a §6.6 user stack to
+            // pull from instead of the game stack.
+            let value = if instruction.operands.is_empty() {
+                self.calls.pop()?
+            } else {
+                let stack = usize::from(self.value(&instruction.operands[0])?);
+                let spare = self.memory.read_word(stack)? + 1;
+
+                self.memory.write_word(stack, spare)?;
+                self.memory.read_word(stack + 2 * usize::from(spare))?
+            };
+
+            self.store_result(instruction.store_variable, value)?;
+            self.pc = instruction.next_address;
+
+            return Ok(());
         }
 
         let reference = self.value(&instruction.operands[0])? as u8;
@@ -1530,16 +1601,40 @@ impl Machine {
             )));
         }
 
-        self.redirections.push((usize::from(values[1]), Vec::new()));
+        let limit = self.redirection_limit(values)?;
+
+        self.redirections
+            .push((usize::from(values[1]), Vec::new(), limit));
 
         Ok(())
+    }
+
+    /// The wrap width a Version 6 redirection asked for, if any
+    /// (§15 output_stream): zero or positive names a window whose
+    /// current width in units is the limit, negative means a box
+    /// of -width units; no width -- or any version but 6 -- is the
+    /// flat, unformatted table.
+    fn redirection_limit(&self, values: &[u16]) -> Result<Option<usize>, VoxamError> {
+        if values.len() <= 2 || self.memory.header().version() != 6 {
+            return Ok(None);
+        }
+
+        let width = signed(values[2]);
+
+        if width < 0 {
+            return Ok(Some(((-width) as usize).max(1)));
+        }
+
+        let window_width = self.windows.property(width, X_SIZE)?;
+
+        Ok(Some(usize::from(window_width).max(1)))
     }
 
     /// Close the newest stream 3 table, writing its count
     /// (§7.1.2.1). New-lines are written as ZSCII 13 (§7.1.2.2.1);
     /// other characters carry their ZSCII codes.
     fn end_redirection(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
-        let Some((table, units)) = self.redirections.pop() else {
+        let Some((table, units, limit)) = self.redirections.pop() else {
             return Err(instruction_error(format!(
                 "output_stream -3 at ${:04x}, but stream 3 is not selected (§7.1.2)",
                 instruction.address
@@ -1547,16 +1642,73 @@ impl Machine {
         };
 
         let repertoire = extras(&self.memory)?;
+        let widest;
 
-        for (offset, unit) in units.iter().enumerate() {
-            let code = unit_to_zscii(*unit, &repertoire)?;
-            self.memory.write_byte(
-                table + REDIRECTION_DATA_OFFSET + offset,
-                (code & 0xFF) as u8,
-            )?;
+        if let Some(limit) = limit {
+            widest = self.write_formatted(table, &units, limit)?;
+        } else {
+            for (offset, unit) in units.iter().enumerate() {
+                let code = unit_to_zscii(*unit, &repertoire)?;
+                self.memory.write_byte(
+                    table + REDIRECTION_DATA_OFFSET + offset,
+                    (code & 0xFF) as u8,
+                )?;
+            }
+
+            self.memory.write_word(table, units.len() as u16)?;
+            widest = units
+                .split(|unit| *unit == u16::from(b'\n'))
+                .map(|part| part.len())
+                .max()
+                .unwrap_or(0);
         }
 
-        self.memory.write_word(table, units.len() as u16)
+        if self.memory.header().version() == 6 {
+            // The $30 word is "total width in pixels" (§11's
+            // table) -- characters times the 1-by-1 font width.
+            self.memory.write_word(0x30, widest as u16)?;
+        }
+
+        Ok(())
+    }
+
+    /// Write print_form's line shape: counted lines, a zero end
+    /// (§15 print_form). The count doubles as the terminator, so a
+    /// blank line travels as a single space. Returns the widest
+    /// line written, for the header's $30 word.
+    fn write_formatted(
+        &mut self,
+        table: usize,
+        units: &[u16],
+        limit: usize,
+    ) -> Result<usize, VoxamError> {
+        let repertoire = extras(&self.memory)?;
+        let text = units_to_string(units);
+        let mut position = table;
+        let mut widest = 0;
+
+        for line in wrapped(&text, limit) {
+            let carried = if line.is_empty() {
+                " ".to_string()
+            } else {
+                line
+            };
+            let count = carried.chars().count();
+            widest = widest.max(count);
+
+            self.memory.write_word(position, count as u16)?;
+            position += REDIRECTION_DATA_OFFSET;
+
+            for character in carried.chars() {
+                let code = char_to_zscii(character, &repertoire)?;
+                self.memory.write_byte(position, (code & 0xFF) as u8)?;
+                position += 1;
+            }
+        }
+
+        self.memory.write_word(position, 0)?;
+
+        Ok(widest)
     }
 
     /// Search a table for a value, delivering its address (§15).
@@ -1753,6 +1905,17 @@ impl Machine {
         self.font = NORMAL_FONT;
         self.frontend.set_font(NORMAL_FONT);
 
+        // The §8.8 window ledger returns to its boot state with
+        // the rest of the interpreter's own memory.
+        self.windows = WindowLedger::new(
+            u16::from(self.frontend.screen_lines()),
+            u16::from(self.frontend.screen_columns()),
+            u16::from(DEFAULT_FOREGROUND_COLOUR),
+            u16::from(DEFAULT_BACKGROUND_COLOUR),
+            1,
+            1,
+        );
+
         self.declare_capabilities()?;
         self.start_execution()
     }
@@ -1808,7 +1971,29 @@ impl Machine {
     /// and clears everything, leaving the lower window selected
     /// (§8.7.3.3). The Version 6 forms wait with Version 6.
     fn op_erase_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
-        let window = signed(self.value(&instruction.operands[0])?);
+        let mut window = signed(self.value(&instruction.operands[0])?);
+
+        if self.memory.header().version() == 6 {
+            if window >= 0 || window == CURRENT_WINDOW {
+                let target = self.windows.resolve(window)?;
+
+                // A character glass renders only windows 0 and 1;
+                // erasing one it never painted is already true
+                // (§8.8.3).
+                if target > 1 {
+                    self.pc = instruction.next_address;
+
+                    return Ok(());
+                }
+
+                window = i32::from(target);
+            }
+
+            if window == UNSPLIT_ERASE {
+                // §8.8.5.3.1: erasing -1 selects window 0.
+                self.windows.selected = 0;
+            }
+        }
 
         if window == UNSPLIT_ERASE {
             self.story_window = true;
@@ -1849,6 +2034,23 @@ impl Machine {
     fn op_split_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let height = self.value(&instruction.operands[0])?;
 
+        if self.memory.header().version() == 6 {
+            // Tile ledger windows 1 and 0 vertically (§8.8.4.1):
+            // window 1 takes the top at the given height in units
+            // and window 0 the rest; widths stay put.
+            let screen_height = u16::from(self.frontend.screen_lines());
+
+            self.windows.write_property(1, windows::Y_COORDINATE, 1)?;
+            self.windows.write_property(1, windows::Y_SIZE, height)?;
+            self.windows
+                .write_property(0, windows::Y_COORDINATE, height + 1)?;
+            self.windows.write_property(
+                0,
+                windows::Y_SIZE,
+                screen_height.saturating_sub(height),
+            )?;
+        }
+
         self.frontend.split_window(height);
         self.pc = instruction.next_address;
 
@@ -1859,8 +2061,22 @@ impl Machine {
     fn op_set_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let window = self.value(&instruction.operands[0])?;
 
-        self.story_window = window == 0;
-        self.frontend.set_window(window);
+        if self.memory.header().version() == 6 {
+            // Any of the eight may be chosen and -3 keeps the
+            // current one; the character glass hears only about
+            // windows 0 and 1, the two it renders (§8.8.3).
+            let selected = self.windows.resolve(i32::from(window))?;
+            self.windows.selected = selected;
+            self.story_window = selected == 0;
+
+            if selected <= 1 {
+                self.frontend.set_window(selected);
+            }
+        } else {
+            self.story_window = window == 0;
+            self.frontend.set_window(window);
+        }
+
         self.pc = instruction.next_address;
 
         Ok(())
@@ -1869,10 +2085,35 @@ impl Machine {
     /// Move the cursor (§8.7.2, §15 set_cursor); the Version 6
     /// forms wait with Version 6.
     fn op_set_cursor(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
-        let line = self.value(&instruction.operands[0])?;
-        let column = self.value(&instruction.operands[1])?;
+        if self.memory.header().version() == 6 {
+            let values = self.values(instruction)?;
 
-        self.frontend.set_cursor(line, column);
+            // A line of -1 turns the blinking cursor off and -2
+            // turns it back on: chrome a character glass has no
+            // cursor of its own to honour, passed quietly. An
+            // ordinary move may name any window, defaulting to
+            // the current one (§15 set_cursor).
+            let line = values[0];
+
+            if line != 0xFFFF && line != 0xFFFE {
+                let column = values.get(1).copied().unwrap_or(0);
+                let window = values
+                    .get(2)
+                    .map_or(CURRENT_WINDOW, |value| i32::from(*value));
+                let target = self.windows.resolve(window)?;
+
+                self.windows
+                    .write_property(i32::from(target), Y_CURSOR, line)?;
+                self.windows
+                    .write_property(i32::from(target), X_CURSOR, column)?;
+            }
+        } else {
+            let line = self.value(&instruction.operands[0])?;
+            let column = self.value(&instruction.operands[1])?;
+
+            self.frontend.set_cursor(line, column);
+        }
+
         self.pc = instruction.next_address;
 
         Ok(())
@@ -1883,7 +2124,18 @@ impl Machine {
     /// the one set_cursor can move (§8.7.2.3.2).
     fn op_get_cursor(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let array = usize::from(self.value(&instruction.operands[0])?);
-        let (row, column) = self.frontend.cursor_position();
+
+        // A character glass reads the current window's cursor from
+        // the §8.8 ledger in Version 6 -- the same place its
+        // set_cursor writes, so the round trip is exact.
+        let (row, column) = if self.memory.header().version() == 6 {
+            (
+                self.windows.property(CURRENT_WINDOW, Y_CURSOR)?,
+                self.windows.property(CURRENT_WINDOW, X_CURSOR)?,
+            )
+        } else {
+            self.frontend.cursor_position()
+        };
 
         self.memory.write_word(array, row)?;
         self.memory.write_word(array + 2, column)?;
@@ -2042,6 +2294,236 @@ impl Machine {
 
         for (offset, value) in encoded.iter().enumerate() {
             self.memory.write_byte(coded + offset, *value)?;
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Place a window at (y, x) in the ledger (§15 move_window):
+    /// §15 itself says "nothing actually happens" on screen, so
+    /// the ledger is the whole of the truth.
+    fn op_move_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        self.windows
+            .r#move(i32::from(values[0]), values[1], values[2])?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Resize a window in the ledger (§15 window_size): "does not
+    /// change the current display", says §15.
+    fn op_window_size(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        self.windows
+            .resize(i32::from(values[0]), values[1], values[2])?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Change a window's attribute flags (§15 window_style).
+    fn op_window_style(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let operation = values.get(2).copied().unwrap_or(0);
+
+        self.windows
+            .restyle(i32::from(values[0]), values[1], operation)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Store one §8.8.3.2 window property (§15 get_wind_prop).
+    fn op_get_wind_prop(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let value = self.windows.property(i32::from(values[0]), values[1])?;
+
+        self.store_result(instruction.store_variable, value)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Write one window property (§15 put_wind_prop).
+    fn op_put_wind_prop(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+
+        self.windows
+            .write_property(i32::from(values[0]), values[1], values[2])?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Set a window's margin sizes (§15 set_margins); the window
+    /// operand comes last and may be omitted, meaning the current
+    /// window.
+    fn op_set_margins(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let window = values
+            .get(2)
+            .map_or(CURRENT_WINDOW, |value| i32::from(*value));
+
+        self.windows.set_margins(window, values[0], values[1])?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Let a pixel scroll pass in the conforming quiet (§15
+    /// scroll_window): a character glass scrolls its lower window
+    /// by §8.7 as text flows and has no pixels here to shift.
+    fn op_scroll_window(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        self.values(instruction)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Report a mouse that never moves or clicks (§15 read_mouse):
+    /// the array's four words report zeros -- parked at nowhere,
+    /// no buttons down, no menu touched.
+    fn op_read_mouse(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let array = usize::from(self.value(&instruction.operands[0])?);
+
+        for word in 0..4 {
+            self.memory.write_word(array + 2 * word, 0)?;
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Fail a menu request the header already refused (§15
+    /// make_menu): an interpreter without menus simply never
+    /// succeeds.
+    fn op_make_menu(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        self.values(instruction)?;
+        self.branch(instruction, false)
+    }
+
+    /// Print a formatted table, line by line (§15 print_form):
+    /// each line a word holding its character count then the
+    /// characters, ending at a zero word, each printed with a
+    /// new-line after it.
+    fn op_print_form(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let mut position = usize::from(self.value(&instruction.operands[0])?);
+        let repertoire = extras(&self.memory)?;
+        let version = self.memory.header().version();
+
+        loop {
+            let count = self.memory.read_word(position)?;
+
+            if count == 0 {
+                break;
+            }
+
+            position += REDIRECTION_DATA_OFFSET;
+
+            let mut line: Units = Vec::new();
+
+            for offset in 0..usize::from(count) {
+                let code = self.memory.read_byte(position + offset)?;
+                line.extend(zscii_to_units(u16::from(code), &repertoire, version)?);
+            }
+
+            line.push(u16::from(b'\n'));
+            self.print_units(&line)?;
+            position += usize::from(count);
+        }
+
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Answer the game's questions about pictures (§15
+    /// picture_data): on a frontend without pictures, the census
+    /// counts zero and no number is valid -- exactly what the
+    /// header's cleared pictures bit promised (§11.1.4).
+    fn op_picture_data(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let number = values[0];
+        let array = usize::from(values[1]);
+
+        if number == 0 {
+            self.memory.write_word(array, 0)?;
+            self.memory.write_word(array + 2, 0)?;
+
+            return self.branch(instruction, false);
+        }
+
+        self.branch(instruction, false)
+    }
+
+    /// Take the display-buffering advice §8.8.7's way (§15
+    /// buffer_screen): the glasses paint every change as it
+    /// happens, the conduct required of an interpreter that
+    /// ignores the advice -- but the mode is remembered and the
+    /// old one stored, and -1 forces an update without changing
+    /// it.
+    fn op_buffer_screen(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let mode = signed(self.value(&instruction.operands[0])?);
+
+        if !matches!(mode, -1..=1) {
+            return Err(instruction_error(format!(
+                "buffer_screen at ${:04x} asks for mode {mode}, but §8.8.7.1 defines \
+                 only 0, 1, and -1",
+                instruction.address
+            )));
+        }
+
+        let previous = self.screen_buffering;
+
+        if mode != -1 {
+            self.screen_buffering = mode as u16;
+        }
+
+        self.store_result(instruction.store_variable, previous)?;
+        self.pc = instruction.next_address;
+
+        Ok(())
+    }
+
+    /// Push onto a user stack, branching on success (§15
+    /// push_stack): the first word counts the spare slots and is
+    /// also the write index; a full stack does nothing at all.
+    fn op_push_stack(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let (value, stack) = (values[0], usize::from(values[1]));
+        let spare = self.memory.read_word(stack)?;
+
+        if spare != 0 {
+            self.memory
+                .write_word(stack + 2 * usize::from(spare), value)?;
+            self.memory.write_word(stack, spare - 1)?;
+        }
+
+        self.branch(instruction, spare != 0)
+    }
+
+    /// Throw items away from the top of a stack (§15 pop_stack):
+    /// the game stack by default, a §6.6 user stack with a second
+    /// operand, where discarding walks the spare count up.
+    fn op_pop_stack(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
+        let values = self.values(instruction)?;
+        let items = values[0];
+
+        if let Some(&stack) = values.get(1) {
+            let stack = usize::from(stack);
+            let spare = self.memory.read_word(stack)?;
+
+            self.memory.write_word(stack, spare + items)?;
+        } else {
+            for _ in 0..items {
+                self.calls.pop()?;
+            }
         }
 
         self.pc = instruction.next_address;
@@ -2493,6 +2975,48 @@ impl Machine {
 
         Ok(())
     }
+}
+
+/// Greedy word-wrap onto lines at most limit units wide (§7.2).
+/// Forced new-lines end their lines; a word longer than the whole
+/// limit breaks at the limit, §8.8.3.1.1's unbuffered fallback.
+fn wrapped(text: &str, limit: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+
+        for word in paragraph.split(' ') {
+            let candidate = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+
+            if candidate.chars().count() <= limit {
+                current = candidate;
+
+                continue;
+            }
+
+            if !current.is_empty() {
+                lines.push(current);
+            }
+
+            let mut remainder: Vec<char> = word.chars().collect();
+
+            while remainder.len() > limit {
+                lines.push(remainder[..limit].iter().collect());
+                remainder = remainder[limit..].to_vec();
+            }
+
+            current = remainder.iter().collect();
+        }
+
+        lines.push(current);
+    }
+
+    lines
 }
 
 /// A line read's §15 time and routine pair, or two zeros.

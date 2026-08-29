@@ -17,6 +17,7 @@ pub mod routine;
 pub mod snapshot;
 pub mod story;
 pub mod variables;
+pub mod windows;
 pub mod zscii;
 
 /// Synthetic story files for the module tests: the smallest bytes

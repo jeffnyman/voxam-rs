@@ -18,6 +18,7 @@ pub enum VoxamError {
     ZMachineMemory(String),
     ZMachineObject(String),
     ZMachineRoutine(String),
+    ZMachineScreen(String),
     ZMachineStack(String),
     ZMachineText(String),
     /// The frontier reporter: pointing Voxam at a story and reading
@@ -38,6 +39,7 @@ impl fmt::Display for VoxamError {
         | Self::ZMachineMemory(message)
         | Self::ZMachineObject(message)
         | Self::ZMachineRoutine(message)
+        | Self::ZMachineScreen(message)
         | Self::ZMachineStack(message)
         | Self::ZMachineText(message)
         | Self::ZMachineUnimplemented(message)) = self;

@@ -452,6 +452,34 @@ pub mod declare {
         }
     }
 
+    const PICTURES_BIT: u8 = 0x02;
+    const SOUND_PRESENCE_BIT: u8 = 0x20;
+    const MENUS_BIT: u8 = 0x01;
+
+    /// Record whether picture displaying is available (§11.1.4):
+    /// bit 1 of Version 6's Flags 1, a capability stated outright.
+    pub fn pictures(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        set_flag(memory, PICTURES_BIT, available)
+    }
+
+    /// Record whether sound effects are available (§9.1.1): bit 5
+    /// of Version 6's Flags 1.
+    pub fn sound_presence(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        set_flag(memory, SOUND_PRESENCE_BIT, available)
+    }
+
+    /// Clear the game's menu request when it cannot be met
+    /// (§11.1.2): bit 8 of Flags 2, in the word's high byte.
+    pub fn menus(memory: &mut Memory, available: bool) -> Result<(), VoxamError> {
+        if available {
+            return Ok(());
+        }
+
+        let high = memory.read_byte(FLAGS_2)?;
+
+        memory.write_byte(FLAGS_2, high & !MENUS_BIT)
+    }
+
     /// Record the colour offer and the default colours (§8.3.2,
     /// §8.3.3), from Version 5.
     pub fn colours(
