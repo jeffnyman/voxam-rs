@@ -7,6 +7,7 @@
 //! Frontends -- terminal, window, web, shell -- live in other
 //! crates and consume this one.
 
+pub mod aamachine;
 pub mod blorb;
 pub mod errors;
 pub mod format;

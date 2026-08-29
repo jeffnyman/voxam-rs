@@ -8,6 +8,7 @@ use std::fmt;
 /// A rule of one of the machines, enforced with its citation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxamError {
+    AAMachine(String),
     Blorb(String),
     GlulxFunction(String),
     GlulxGlk(String),
@@ -37,7 +38,8 @@ pub enum VoxamError {
 
 impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (Self::Blorb(message)
+        let (Self::AAMachine(message)
+        | Self::Blorb(message)
         | Self::GlulxFunction(message)
         | Self::GlulxGlk(message)
         | Self::GlulxInstruction(message)

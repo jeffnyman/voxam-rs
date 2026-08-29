@@ -20,6 +20,7 @@ developing it does.
 | `replay-diff.sh` | every acceptance recording, replayed under both implementations -- IDENTICAL byte for byte, FRONTIER when the port halts at a named unbuilt feature with its output a byte prefix of the reference's, PARTED only on real divergence |
 | `glulx-machine-diff.sh` | the bare Glulx machine -- a byte-exact Quetzal save vector, then every checker `.ulx` booted with no Glk library and run to its quit or halt, step counts and halting errors agreeing whole |
 | `glulxercise.sh` | the M3 gate itself: glulxercise run whole under a scripted Glk display, the verdict the story's own -- "All tests passed." |
+| `aastory-diff.sh` | every .aastory fixture the reference keeps -- header claims, bibliography, extended characters, chunk census, and the whole dictionary decoded, agreeing line for line |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors
