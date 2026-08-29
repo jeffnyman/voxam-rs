@@ -18,6 +18,7 @@ developing it does.
 | `dictionary-diff.sh` | every dictionary entry of every Z-code story, decoded, with sampled round-trip lookups -- the decoder, the encoder, and the §13 table walk agreeing |
 | `objects-diff.sh` | every object of every Z-code story -- relations, attributes, short names, and property lists walked linearly with a 64-entry cap against corrupt tables |
 | `replay-diff.sh` | every acceptance recording, replayed under both implementations -- IDENTICAL byte for byte, FRONTIER when the port halts at a named unbuilt feature with its output a byte prefix of the reference's, PARTED only on real divergence |
+| `glulx-machine-diff.sh` | the bare Glulx machine -- a byte-exact Quetzal save vector, then every checker `.ulx` booted with no Glk library and run to its quit or halt, step counts and halting errors agreeing whole |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors
@@ -29,6 +30,8 @@ guessed.
 | --- | --- |
 | `rng_oracle.py` | the xorshift32 compatibility contract: mixing outputs, raw stream states, and the pinned roll sequences in `rng.rs` |
 | `zscii_oracle.py` | the §3 text battery: decode results across the version rules, encode bytes, error prose, and the surrogate fusing in `zscii.rs` |
+| `floats_oracle.py` | the Glulx float semantics: encode/decode bits, the saturating conversions with banker's rounding, modulo pairs, pow's promised specials, and the jfeq closeness rules in `floats.rs` |
+| `glulx_machine_reference.py` | the machine-era answers `glulx-machine-diff.sh` diffs: the reference's own save bytes and bare-run outcomes |
 
 The deeper certifications -- seeded recordings replaying
 identically, glulxercise, the Å-machine batteries -- ride the

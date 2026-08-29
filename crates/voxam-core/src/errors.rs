@@ -10,11 +10,13 @@ use std::fmt;
 pub enum VoxamError {
     Blorb(String),
     GlulxFunction(String),
+    GlulxGlk(String),
     GlulxInstruction(String),
     GlulxMemory(String),
     GlulxSave(String),
     GlulxStack(String),
     GlulxStory(String),
+    GlulxString(String),
     Iff(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
@@ -37,11 +39,13 @@ impl fmt::Display for VoxamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (Self::Blorb(message)
         | Self::GlulxFunction(message)
+        | Self::GlulxGlk(message)
         | Self::GlulxInstruction(message)
         | Self::GlulxMemory(message)
         | Self::GlulxSave(message)
         | Self::GlulxStack(message)
         | Self::GlulxStory(message)
+        | Self::GlulxString(message)
         | Self::Iff(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)
