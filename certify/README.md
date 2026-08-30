@@ -29,6 +29,7 @@ developing it does.
 | `aaglkote-diff.sh` | the Å-machine wire whole: the terminal sweep's four sessions through both GlkOte serving loops, the same typist on the plain input scripts, the transcripts diffed byte for byte |
 | `png-diff.sh` | every PNG picture of every corpus Blorb, decoded and re-encoded under both implementations -- the Version 6 wire's own transform: chunk walking, inflation of streams other tools compressed, unfiltering, pixel extraction, and the hand-spelled deterministic deflate, the re-encoded bytes diffed whole (the pure-Python side takes minutes) |
 | `gallery-diff.sh` | every corpus Blorb's gallery census -- release, the Reso scaling fractions, the APal and BPal palette chunks, and each picture's measured size beside its Elbow Room ratio -- without decoding a pixel |
+| `stage-diff.sh` | eleven drills through the §8.8 StageModel under both implementations -- wraps, scrolls, splits, margins, erases, line editing, the [MORE] budget, odd font metrics, the refusals -- grids, cursors, unit paints, and pauses diffed line for line |
 
 Beside the sweeps live the **oracles** -- scripts that run the
 genuine reference implementation to manufacture the golden vectors

@@ -28,5 +28,8 @@ pub mod png;
 mod png_tests;
 pub mod saves;
 pub mod screen;
+pub mod stage;
+#[cfg(test)]
+mod stage_tests;
 pub mod wav;
 pub mod zmachine;

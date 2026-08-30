@@ -77,7 +77,8 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
 | `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** blessed's cell painting maps to ratatui's buffer model, not line-for-line. |
 | `gallery.py` | `voxam-core::gallery` | Ported with the deferred Blorb chunks (RelN, Reso, APal, BPal): sizes eager, pixels lazy, the adaptive-palette dance and the baked replacements whole; `Fraction` becomes the module's own exact `Ratio`. |
-| `stage.py`, `speaker.py` | deferred | The pygame window. The webview face already renders V6 art, sound, and mouse; decide later whether a native window still earns its keep. `stage.py`'s StageModel is next: the wire's Version 6 rung. |
+| `stage.py` | `voxam-core::stage` | The §8.8 model whole -- eight windows, one grid, unit paints, the [MORE] budget -- certified by the stage drill sweep. Python's `//` becomes `div_euclid`, so any negative unit floors identically. |
+| `speaker.py` | deferred | The pygame window's voice. The webview face already plays V6 sound; decide later whether a native window still earns its keep. |
 | `web.py`, `glkote.py`, `*/glkote.py` | `voxam` (CLI) | `--web` on a stdlib-adjacent server (`tiny_http` or hand-rolled), `--glkote` over stdio. The wire types live in `voxam-core`, on a hand-rolled JSON that keeps Python's exact spelling -- insertion-ordered keys, compact separators, ensure_ascii -- because the stanza sweeps diff byte for byte, which serde_json's dialect would part. |
 | `filmstrip.py` | with the faces | Screenshot regression; wants the faces standing first. |
 | `tests/` (42k lines) | selectively | Port unit tests for the decoders (ZSCII, operands, Quetzal, IFF); the recordings certify the rest end-to-end. |
