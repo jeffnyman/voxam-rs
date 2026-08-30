@@ -58,12 +58,30 @@ fn plays(arguments: &[String]) -> ExitCode {
     let mut pixels = false;
     let mut seed: Option<u32> = None;
     let mut story: Option<String> = None;
+    let mut identity = Identity::default();
     let mut walker = arguments.iter();
 
     while let Some(held) = walker.next() {
         match held.as_str() {
             "--plain" => plain = true,
             "--pixels" => pixels = true,
+            "--interpreter" => {
+                let Some(name) = walker.next() else {
+                    eprintln!("voxam: --interpreter takes a platform name or number");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                };
+
+                match interpreter_number(name) {
+                    Some(number) => identity.interpreter = Some(number),
+                    None => {
+                        eprintln!(
+                            "voxam: unknown interpreter {name:?}; use a number or one                              of the §11.1.3 platform names"
+                        );
+                        return ExitCode::from(EXIT_UNUSABLE);
+                    }
+                }
+            }
+            "--tandy" => identity.tandy = true,
             "--seed" => {
                 let Some(value) = walker.next().and_then(|told| told.parse().ok()) else {
                     eprintln!("voxam: --seed takes a number");
@@ -88,7 +106,7 @@ fn plays(arguments: &[String]) -> ExitCode {
         return ExitCode::from(EXIT_UNUSABLE);
     }
 
-    play(&story, seed, !plain, pixels)
+    play(&story, seed, !plain, pixels, identity)
 }
 
 /// Print the flag surface and refuse.
@@ -668,7 +686,7 @@ fn aamachine_session(path: &str, seed: Option<u32>, screen: bool) -> ExitCode {
 /// Play a story: the painted terminal by default at a real
 /// terminal, the plain stream behind `--plain` or a pipe -- text
 /// flows out, lines flow in, and end of input ends the session.
-fn play(path: &str, seed: Option<u32>, screen: bool, pixels: bool) -> ExitCode {
+fn play(path: &str, seed: Option<u32>, screen: bool, pixels: bool, identity: Identity) -> ExitCode {
     println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
 
     if aamachine_story(Path::new(path)) {
@@ -735,7 +753,14 @@ fn play(path: &str, seed: Option<u32>, screen: bool, pixels: bool) -> ExitCode {
     // -- the reference's own choice -- and `--plain` or a pipe
     // keeps the stream, which is always there.
     if screen && glass::glassable() {
-        return match glass::session(loaded, blorb.as_ref(), seed, Path::new(path), pixels) {
+        return match glass::session(
+            loaded,
+            blorb.as_ref(),
+            seed,
+            Path::new(path),
+            pixels,
+            identity,
+        ) {
             Ok(()) => ExitCode::from(EXIT_OK),
             Err(error) => {
                 println!("voxam: {error}");
@@ -754,7 +779,7 @@ fn play(path: &str, seed: Option<u32>, screen: bool, pixels: bool) -> ExitCode {
                 story,
                 Box::new(plain()),
                 seed,
-                Identity::default(),
+                identity,
                 Some(Box::new(saves)),
             )
         })

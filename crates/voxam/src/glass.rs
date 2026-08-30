@@ -119,6 +119,7 @@ pub fn session(
     seed: Option<u32>,
     path: &Path,
     pixels: bool,
+    identity: Identity,
 ) -> Result<(), VoxamError> {
     let version = story.header().version();
     let (cover, note) = covered(blorb);
@@ -143,7 +144,7 @@ pub fn session(
         story,
         Box::new(PaintedHalf(Rc::clone(&face))),
         seed,
-        Identity::default(),
+        identity,
         Some(Box::new(saves)),
     )?;
 

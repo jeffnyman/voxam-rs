@@ -57,6 +57,11 @@ cargo run --release -- --seed 92 stories/zork1.z3
 # Keep the plain stream even at a real terminal.
 cargo run --release -- --plain stories/zork1.z3
 
+# Claim a §11.1.3 interpreter identity. Games key real behavior
+# off it: Beyond Zork paints its colors when it believes it is on
+# an Amiga.
+cargo run --release -- --interpreter amiga stories/beyondzork.z5
+
 # Draw a Blorb's cover art in real sixel pixels rather than
 # half-block cells -- for terminals that speak sixel, like
 # Windows Terminal 1.22 and later.

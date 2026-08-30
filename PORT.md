@@ -158,11 +158,15 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    screen. Both are pinned by a ConPTY harness that replays real
    sessions onto a virtual screen, dirty-screen scenario included
    -- the milestone's filmstrip, arrived at last. The eyes pass
-   also asked after Beyond Zork's colours: the reference painter
-   is exactly as monochrome through the same screens -- the DOS
-   blue was the interpreter's own default palette, not the game's
-   ink -- so the port is faithful and a palette dressing is a
-   both-sides feature for later. The sixel cover road shipped with
+   also asked after Beyond Zork's colours: with the default
+   IBM-PC identity the reference painter is exactly as monochrome
+   through the same screens, and the real key is the §11.1.3
+   interpreter number -- Beyond Zork paints its palette when it
+   believes it is on an Amiga. The `--interpreter` and `--tandy`
+   flags now reach the play path as they always did in the
+   reference, and the harness shows both implementations lighting
+   the same colours under `--interpreter amiga` (the painter
+   spells the classic dim SGR family, blessed's own shades). The sixel cover road shipped with
    the pass: `--pixels` draws a Blorb cover in real pixels on a
    terminal that speaks sixel (Windows Terminal 1.22+). Deferred
    within the milestone, each honestly claimed away: the speaker

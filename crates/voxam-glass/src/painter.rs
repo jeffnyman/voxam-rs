@@ -67,7 +67,10 @@ fn colour(code: i32) -> Option<Color> {
         6 => Some(Color::Blue),
         7 => Some(Color::Magenta),
         8 => Some(Color::Cyan),
-        9 => Some(Color::White),
+        // blessed's "white" is the classic dim SGR 37, which
+        // ratatui spells Gray; Color::White would be the bright
+        // variant no reference session shows.
+        9 => Some(Color::Gray),
         _ => None,
     }
 }
