@@ -16,7 +16,7 @@ fn main() {
 
     page.window(1, "buffer", 0, BOX, WindowSpec::default())
         .unwrap();
-    told(&page.update(false, false).unwrap());
+    told(&page.update(false, false, None).unwrap());
 
     page.window(1, "buffer", 0, BOX, WindowSpec::default())
         .unwrap();
@@ -40,7 +40,7 @@ fn main() {
         },
     )
     .unwrap();
-    told(&page.update(false, false).unwrap());
+    told(&page.update(false, false, None).unwrap());
 
     page.window(1, "buffer", 0, BOX, WindowSpec::default())
         .unwrap();
@@ -57,7 +57,7 @@ fn main() {
     page.typed(std::collections::HashMap::from([(1, "go nor".to_string())]));
     page.buffer(1, &[Run::text("normal", 0, "clock\n")], false)
         .unwrap();
-    told(&page.update(false, false).unwrap());
+    told(&page.update(false, false, None).unwrap());
 
     let mut grid = Page::new();
 
@@ -111,5 +111,5 @@ fn main() {
     .unwrap();
     grid.timer(100, false);
     grid.prompt("write", "save").unwrap();
-    told(&grid.update(false, false).unwrap());
+    told(&grid.update(false, false, None).unwrap());
 }

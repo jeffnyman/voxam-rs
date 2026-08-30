@@ -451,6 +451,11 @@ pub struct GlkOteFrontend {
     restarted: bool,
     covered: bool,
     refresh_owed: bool,
+    // The sidecar seam: granted by the display's "voxam" token,
+    // carrying the last line this face delivered (PORT: What the
+    // sidecar carries).
+    speaks_voxam: bool,
+    last_command: Option<String>,
     sound_ops: Vec<Object>,
     channel_idents: Vec<(u32, i64)>,
     next_channel: i64,
@@ -473,6 +478,8 @@ impl GlkOteFrontend {
             restarted: false,
             covered: false,
             refresh_owed: false,
+            speaks_voxam: false,
+            last_command: None,
             sound_ops: Vec::new(),
             channel_idents: Vec::new(),
             next_channel: 1,
@@ -501,6 +508,7 @@ impl GlkOteFrontend {
             let mut claims = self.claims.borrow_mut();
 
             claims.timer_input = supports("timer");
+            self.speaks_voxam = supports("voxam");
             claims.graphics = supports("graphicswin");
             claims.buffer_images = supports("graphics");
             claims.hyperlink_input = supports("hyperlinks");
@@ -734,11 +742,49 @@ impl GlkOteFrontend {
     /// also why the ops never touch the Page mid-run -- then the
     /// composer reads the tree, then a timer restart is re-fed,
     /// since the composer's own polled feeding cannot carry one.
+    /// The voxam block, Glulx's honest share of it.
+    ///
+    /// Glulx has no fixed location or score globals to read, so
+    /// only the wire's own facts travel: the last delivered line
+    /// and the machine's discontinuity bit, read once and rested
+    /// -- handed in by the serving loop, which holds the machine
+    /// this face cannot (PORT: What the sidecar carries).
+    pub fn sidecar(&mut self, discontinuity: &mut bool) -> Option<Object> {
+        if !self.speaks_voxam {
+            return None;
+        }
+
+        let mut block = Object::new();
+
+        if let Some(command) = self.last_command.clone() {
+            block.set("command", command);
+        }
+
+        if *discontinuity {
+            *discontinuity = false;
+            block.set("discontinuity", true);
+        }
+
+        Some(block)
+    }
+
     pub fn render(
         &mut self,
         glk: &mut Glk,
         memory: &Memory,
         exit: bool,
+    ) -> Result<Object, VoxamError> {
+        self.render_with(glk, memory, exit, None)
+    }
+
+    /// The reference's render carries a default voxam argument;
+    /// Rust spells the default as this delegating pair.
+    pub fn render_with(
+        &mut self,
+        glk: &mut Glk,
+        memory: &Memory,
+        exit: bool,
+        voxam: Option<Object>,
     ) -> Result<Object, VoxamError> {
         self.front(glk);
         self.ops.retain(|(key, _)| glk.windows.contains_key(key));
@@ -792,7 +838,7 @@ impl GlkOteFrontend {
 
         let refresh = std::mem::replace(&mut self.refresh_owed, false);
 
-        self.page.update(exit, refresh)
+        self.page.update(exit, refresh, voxam)
     }
 
     /// Translate one inbound stanza into the verdict it means.
@@ -847,6 +893,8 @@ impl GlkOteFrontend {
                     .map_or(0, terminator_code);
                 let window = self.window(stanza)?;
                 let value = stringy(stanza.get("value"));
+
+                self.last_command = Some(value.clone());
 
                 crate::glulx::bridge::plain(glk.deliver_line(memory, window, &value, terminator))
                     .map(Accepted::Event)
@@ -1384,9 +1432,11 @@ fn served(
 
         let running = machine.running();
         let update = {
+            let voxam = face.borrow_mut().sidecar(&mut machine.discontinuity);
             let (glk, memory) = attached(machine)?;
 
-            face.borrow_mut().render(glk, memory, !running)?
+            face.borrow_mut()
+                .render_with(glk, memory, !running, voxam)?
         };
 
         write_stanza(writer, &update);

@@ -208,6 +208,10 @@ pub struct Machine {
     /// The Glk seam, or None with no library installed.
     pub bridge: Option<Bridge>,
     running: bool,
+    /// The sidecar's one honest bit: an undo, restore, or restart
+    /// broke the causal thread; the wire face reads it once and
+    /// rests it (PORT: What the sidecar carries).
+    pub discontinuity: bool,
     suspended: bool,
     // The generator is deliberately not reseeded by restart: it is
     // no part of saved state either (Glulx: The Random Number
@@ -240,6 +244,7 @@ impl Machine {
             pc: 0,
             bridge: None,
             running: true,
+            discontinuity: false,
             suspended: false,
             random: Randomizer::new(seed),
         };
@@ -1052,7 +1057,11 @@ impl Machine {
 
                 self.store(args[0].target(), answer)
             }
-            op::RESTART => self.restart(),
+            op::RESTART => {
+                self.discontinuity = true;
+
+                self.restart()
+            }
             op::SAVE => {
                 // The call stub is pushed first, so it lands
                 // inside the save's own stack chunk; popping it
@@ -1079,6 +1088,8 @@ impl Machine {
                 let result = serial::restore(self, stream)?;
 
                 if result == serial::SUCCEEDED {
+                    self.discontinuity = true;
+
                     self.pop_stub(RESTORED)
                 } else {
                     self.store(args[1].target(), result)
@@ -1102,6 +1113,8 @@ impl Machine {
                 let result = serial::restore_undo(self)?;
 
                 if result == serial::SUCCEEDED {
+                    self.discontinuity = true;
+
                     self.pop_stub(RESTORED)
                 } else {
                     self.store(args[0].target(), result)

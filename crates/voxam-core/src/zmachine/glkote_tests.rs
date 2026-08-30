@@ -2555,3 +2555,141 @@ fn the_stage_asks_for_its_file() {
         "read"
     );
 }
+
+// The sidecar rides when the display says the "voxam" token: the
+// machine's honest bearings -- a zeroed story tallies score and
+// turns with no location to name -- and, once a line lands, the
+// very command the wire delivered (PORT: What the sidecar
+// carries). Ungranted, the update carries no block at all.
+#[test]
+fn the_sidecar_rides_when_granted() {
+    let mut session = session_with(AREAD, 5, None, None, &init_supporting(r#""timer","voxam""#));
+
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+
+    assert_eq!(told(at(&update, "voxam")), r#"{"score":0,"turns":0}"#);
+
+    let generation = int_of(at(&update, "gen"));
+
+    session
+        .accept(&parsed(&format!(
+            r#"{{"type":"line","gen":{generation},"value":"go north"}}"#
+        )))
+        .unwrap();
+    session.machine().run().unwrap();
+
+    let ended = session.render(true).unwrap();
+
+    assert_eq!(
+        str_of(at(entry(at(&ended, "voxam")), "command")),
+        "go north"
+    );
+
+    let mut bare = opened(AREAD, 5);
+
+    bare.machine().run().unwrap();
+
+    assert!(bare.render(false).unwrap().get("voxam").is_none());
+}
+
+// The bearings name the location honestly: a planted object table
+// answers the first global's object and short name, an unreadable
+// object answers None rather than a halt, and the discontinuity
+// bit is read once and rested (PORT: What the sidecar carries).
+#[test]
+fn the_sidecar_tells_location_and_discontinuity() {
+    let mut session = session_with(READ_CHAR, 5, None, None, &init_supporting(r#""voxam""#));
+
+    // The boot-cached object table sits at address 0: Version 5
+    // defaults span 126 bytes, so object 1's entry begins at $7E
+    // with its property pointer at $8A, and the properties at
+    // $1A0 open with a one-word short name spelling "abc".
+    {
+        let memory = session.machine().memory_mut();
+
+        memory.write_word(0x100, 1).unwrap();
+        memory.write_word(0x8A, 0x1A0).unwrap();
+        memory.write_byte(0x1A0, 1).unwrap();
+        memory.write_word(0x1A1, 0x98E8).unwrap();
+    }
+
+    session.machine().discontinuity = true;
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let block = entry(at(&update, "voxam"));
+
+    assert_eq!(told(at(block, "location")), r#"{"object":1,"name":"abc"}"#);
+    assert_eq!(at(block, "discontinuity"), &Value::Bool(true));
+
+    let generation = int_of(at(&update, "gen"));
+
+    session
+        .accept(&parsed(&format!(
+            r#"{{"type":"char","gen":{generation},"value":"x"}}"#
+        )))
+        .unwrap();
+    session.machine().run().unwrap();
+
+    let rested = session.render(true).unwrap();
+
+    assert!(entry(at(&rested, "voxam")).get("discontinuity").is_none());
+
+    // An object past every table answers None, gently.
+    session
+        .machine()
+        .memory_mut()
+        .write_word(0x100, 500)
+        .unwrap();
+
+    assert!(session.machine().bearings().unwrap().location.is_none());
+}
+
+// A time game's globals are the clock, no score at all: the
+// bearings stay honestly silent about them (§8.2.3), and the
+// block through the face carries neither.
+#[test]
+fn a_time_games_tally_stays_honest() {
+    let mut session = session_with(READ_CHAR, 3, None, None, &init_supporting(r#""voxam""#));
+
+    session
+        .machine()
+        .memory_mut()
+        .write_byte(0x01, 0x02)
+        .unwrap();
+
+    let bearings = session.machine().bearings().unwrap();
+
+    assert!(bearings.score.is_none());
+    assert!(bearings.turns.is_none());
+
+    let block = session.sidecar().unwrap().unwrap();
+
+    assert!(block.get("score").is_none());
+    assert!(block.get("turns").is_none());
+}
+
+// The stage face speaks the sidecar too: the same token, the same
+// honest block, over the scaled canvas.
+#[test]
+fn the_stage_speaks_the_sidecar_too() {
+    let mut session = staged_session(READ_CHAR, None, &[]);
+
+    session
+        .face()
+        .begin(&parsed(
+            r#"{"type":"init","gen":0,"support":["timer","stage","sound","voxam"],"metrics":{"width":1280,"height":800}}"#,
+        ))
+        .unwrap();
+
+    session.machine().discontinuity = true;
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let block = entry(at(&update, "voxam"));
+
+    assert_eq!(int_of(at(block, "score")), 0);
+    assert_eq!(at(block, "discontinuity"), &Value::Bool(true));
+}

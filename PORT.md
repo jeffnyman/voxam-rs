@@ -121,9 +121,10 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    against the Rust binary, and every wire sweep runs
    byte-identical: zglkote 42 of 42 (Arthur, Journey, Shogun, and
    Zork Zero on the stage dialect included), gglkote 2 of 2,
-   aaglkote 4 of 4. The `voxam:` sidecar moved to its own rung:
-   designed in the reference first, then ported -- the deluxe
-   features consume it, so it rides ahead of milestone 7.
+   aaglkote 4 of 4 -- and the `voxam:` sidecar, designed into the
+   reference first and ported in kind, rides every one of those
+   sessions again under its own token-granted sweep, still
+   byte-identical.
 6. **The painted terminal.** ratatui glass for all three machines.
    *Gate:* filmstrip comparisons where determinism allows; eyes
    otherwise.
@@ -141,8 +142,10 @@ whole of the interpreter's contribution to the deluxe features:
 a dumb factual feed, with every ounce of graph, layout, and
 rendering intelligence living in the face. Surveying prior art
 confirmed that this small tuple is sufficient for a working
-automapper, and taught one addition. The schema, when milestone 5
-designs it:
+automapper, and taught one addition. The schema, designed into
+the reference with milestone 5 and granted by the display's own
+`"voxam"` init-support token (an ungranted session carries no
+block at all):
 
 - **The location**: object id and printed name. Per-machine
   honesty rules here — the Z-machine's global 0 is guaranteed
@@ -259,6 +262,16 @@ sweeps prove the outputs identical across all of them.
   its ribbon from the $30 width word, which is how a cells-for-
   units slip was found. The zglkote sweep proves all four stage
   sessions identical.
+- **The sidecar's machine handle is the serving loop's.** The
+  reference's Glulx and Å-machine faces hold a machine attribute
+  the loop attaches, and their sidecar blocks read the
+  discontinuity bit through it; the Rust faces cannot hold their
+  machines, so `sidecar(&mut machine.discontinuity)` is composed
+  by the serving loop and handed into `render_with` -- the
+  reference's default `voxam` argument, spelled as a delegating
+  pair. The Z face needs none of it: render lives on the Session,
+  which holds both ends. The sidecar sweep proves every granted
+  telling identical.
 - **The gallery caches behind `Rc`.** The reference's decode cache
   hands back the same object so re-plots are free; here `picture()`
   answers `Rc<Picture>` clones, `Rc::ptr_eq` standing in for the

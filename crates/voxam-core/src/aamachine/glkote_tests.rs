@@ -666,3 +666,65 @@ fn a_refresh_keeps_the_dress() {
 
     assert!(runs_of(&update).contains(&r#"{"style":"subheader","text":"kept"}"#.to_string()));
 }
+
+// The sidecar rides when the display says the "voxam" token: the
+// first update carries the empty block -- the feed alive, nothing
+// yet to tell -- and once a line lands the block carries it (PORT:
+// What the sidecar carries).
+#[test]
+fn the_sidecar_rides_when_granted() {
+    let mut opening = init();
+
+    opening.set(
+        "support",
+        Value::List(vec![Value::from("timer"), Value::from("voxam")]),
+    );
+
+    let (mut face, mut machine) = opened_supporting(ASKS_LINE, None, &opening);
+    let voxam = face.sidecar(&mut machine.discontinuity);
+    let update = face.render_with(&mut machine.voice, false, voxam).unwrap();
+
+    assert_eq!(told(at(&update, "voxam")), "{}");
+
+    face.accept(
+        &mut machine,
+        &parsed(r#"{"type":"line","gen":1,"window":1,"value":"west"}"#),
+    )
+    .unwrap();
+
+    let voxam = face.sidecar(&mut machine.discontinuity);
+    let update = face.render_with(&mut machine.voice, false, voxam).unwrap();
+
+    assert_eq!(told(at(&update, "voxam")), r#"{"command":"west"}"#);
+}
+
+// The discontinuity bit is read once and rested; ungranted, the
+// render carries no block at all.
+#[test]
+fn the_sidecar_rests_the_discontinuity() {
+    let mut opening = init();
+
+    opening.set("support", Value::List(vec![Value::from("voxam")]));
+
+    let (mut face, mut machine) = opened_supporting(ASKS_LINE, None, &opening);
+
+    machine.discontinuity = true;
+
+    let voxam = face.sidecar(&mut machine.discontinuity);
+    let update = face.render_with(&mut machine.voice, false, voxam).unwrap();
+
+    assert_eq!(told(at(&update, "voxam")), r#"{"discontinuity":true}"#);
+    assert!(!machine.discontinuity);
+
+    let (mut plain, mut quiet) = opened(ASKS_LINE, None);
+    let voxam = plain.sidecar(&mut quiet.discontinuity);
+
+    assert!(voxam.is_none());
+    assert!(
+        plain
+            .render_with(&mut quiet.voice, false, voxam)
+            .unwrap()
+            .get("voxam")
+            .is_none()
+    );
+}

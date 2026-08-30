@@ -101,7 +101,7 @@ fn rooted(frontend: Box<dyn Frontend>) -> (Glk, u32) {
 fn turned(composer: &mut Composer, library: &mut Glk, memory: &Memory, page: &mut Page) -> Object {
     composer.compose(library, memory, page).unwrap();
 
-    page.update(false, false).unwrap()
+    page.update(false, false, None).unwrap()
 }
 
 fn saying(library: &mut Glk, window: u32, text: &str, style_number: u32) {
@@ -1979,4 +1979,50 @@ fn a_wrongful_event_is_loud() {
 
     assert!(!clean);
     assert_eq!(str_of(at(stanzas.last().unwrap(), "type")), "error");
+}
+
+// The sidecar rides when the display says the "voxam" token: Glulx
+// has no location or score globals to read, so the block carries
+// the wire's own facts alone -- the delivered line and the
+// machine's discontinuity bit, read once and rested, handed in by
+// the serving loop that holds the machine (PORT: What the sidecar
+// carries).
+#[test]
+fn the_sidecar_rides_when_granted() {
+    let granted =
+        r#"{"type":"init","gen":0,"support":["timer","voxam"],"metrics":{"width":80,"height":24}}"#;
+    let (clean, stanzas, machine) = served_lines(
+        &[
+            granted.to_string(),
+            r#"{"type":"char","gen":1,"window":1,"value":"A"}"#.to_string(),
+        ],
+        AWAITS_KEY,
+    );
+
+    assert!(clean);
+    assert!(!machine.discontinuity);
+    assert_eq!(told(at(&stanzas[0], "voxam")), "{}");
+
+    // The block itself: the command recorded, the discontinuity
+    // read once and rested; an ungranted face answers none.
+    let mut face = GlkOteFrontend::new();
+
+    face.begin(&parsed(granted)).unwrap();
+
+    face.last_command = Some("go".to_string());
+
+    let mut flag = true;
+    let block = face.sidecar(&mut flag).unwrap();
+
+    assert_eq!(
+        told(&Value::Object(block)),
+        r#"{"command":"go","discontinuity":true}"#
+    );
+    assert!(!flag);
+
+    let mut plain = GlkOteFrontend::new();
+    let mut standing = true;
+
+    assert!(plain.sidecar(&mut standing).is_none());
+    assert!(standing);
 }

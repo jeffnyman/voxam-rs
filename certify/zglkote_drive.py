@@ -102,7 +102,8 @@ def main() -> int:
         {
             "type": "init",
             "gen": 0,
-            "support": ["timer", "graphics", "graphicswin", "colors", "sound", "stage"],
+            "support": ["timer", "graphics", "graphicswin", "colors", "sound", "stage"]
+            + (["voxam"] if os.environ.get("VOXAM_SIDECAR") else []),
             "metrics": {
                 "width": 800,
                 "height": 480,

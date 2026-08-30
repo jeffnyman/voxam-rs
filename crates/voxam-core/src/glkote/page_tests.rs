@@ -73,7 +73,7 @@ fn gridded() -> Page {
 
 // Send one update and redeclare the lone buffer for the next.
 fn turned(page: &mut Page) {
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
     declare(page, 1, BOX);
 }
 
@@ -97,7 +97,7 @@ fn refused(result: Result<(), crate::errors::VoxamError>, wants: &str) {
 #[test]
 fn the_first_update_carries_the_whole_tree() {
     let mut page = buffered();
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         told(&update),
@@ -116,7 +116,7 @@ fn an_empty_tree_still_speaks_first() {
     let mut page = Page::new();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"update\",\"gen\":1,\"windows\":[]}"
     );
 }
@@ -127,11 +127,11 @@ fn an_empty_tree_still_speaks_first() {
 fn an_unchanged_cycle_passes() {
     let mut page = buffered();
 
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
     declare(&mut page, 1, BOX);
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
     assert_eq!(page.generation(), 1);
@@ -143,10 +143,10 @@ fn an_unchanged_cycle_passes() {
 fn windows_travel_only_when_the_tree_moves() {
     let mut page = buffered();
 
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
     declare(&mut page, 1, (0, 30, 640, 400));
 
-    let moved = page.update(false, false).unwrap();
+    let moved = page.update(false, false, None).unwrap();
 
     assert_eq!(moved.get("gen"), Some(&Value::Int(2)));
     assert_eq!(
@@ -160,7 +160,7 @@ fn windows_travel_only_when_the_tree_moves() {
     declare(&mut page, 1, (0, 30, 640, 400));
     page.buffer(1, &[run("normal", 0, "text")], false).unwrap();
 
-    let steady = page.update(false, false).unwrap();
+    let steady = page.update(false, false, None).unwrap();
 
     assert!(!steady.contains("windows"));
     assert!(steady.contains("content"));
@@ -174,11 +174,11 @@ fn closing_windows_shrinks_the_array() {
 
     declare(&mut page, 1, BOX);
     declare_grid(&mut page, 2, TOP, (80, 1));
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
 
     declare(&mut page, 1, BOX);
 
-    let fewer = page.update(false, false).unwrap();
+    let fewer = page.update(false, false, None).unwrap();
     let ids: Vec<i64> = fewer
         .get("windows")
         .and_then(Value::as_list)
@@ -196,7 +196,7 @@ fn closing_windows_shrinks_the_array() {
 
     assert_eq!(ids, vec![1]);
 
-    let empty = page.update(false, false).unwrap();
+    let empty = page.update(false, false, None).unwrap();
 
     assert_eq!(shown(empty.get("windows").unwrap()), "[]");
 }
@@ -207,8 +207,8 @@ fn closing_windows_shrinks_the_array() {
 fn a_retired_id_may_never_return() {
     let mut page = buffered();
 
-    page.update(false, false).unwrap();
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
+    page.update(false, false, None).unwrap();
 
     refused(
         page.window(1, "buffer", 0, BOX, WindowSpec::default()),
@@ -227,7 +227,7 @@ fn paragraphs_split_and_append() {
     page.buffer(1, &[run("normal", 0, "a\nb")], false).unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"normal\",\"text\":\"a\"}]},\
          {\"content\":[{\"style\":\"normal\",\"text\":\"b\"}]}]"
     );
@@ -236,7 +236,7 @@ fn paragraphs_split_and_append() {
     page.buffer(1, &[run("normal", 0, "c\n")], false).unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"append\":true,\"content\":[{\"style\":\"normal\",\"text\":\"c\"}]}]"
     );
 
@@ -244,7 +244,7 @@ fn paragraphs_split_and_append() {
     page.buffer(1, &[run("normal", 0, "d")], false).unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"normal\",\"text\":\"d\"}]}]"
     );
 }
@@ -260,7 +260,7 @@ fn blank_lines_are_empty_objects() {
         .unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"normal\",\"text\":\"x\"}]},{},{},\
          {\"content\":[{\"style\":\"normal\",\"text\":\"y\"}]}]"
     );
@@ -269,7 +269,7 @@ fn blank_lines_are_empty_objects() {
     page.buffer(1, &[run("normal", 0, "\nz")], false).unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"normal\",\"text\":\"z\"}]}]"
     );
 
@@ -278,7 +278,7 @@ fn blank_lines_are_empty_objects() {
     fresh.buffer(1, &[run("normal", 0, "\nz")], false).unwrap();
 
     assert_eq!(
-        spans(&fresh.update(false, false).unwrap()),
+        spans(&fresh.update(false, false, None).unwrap()),
         "[{},{\"content\":[{\"style\":\"normal\",\"text\":\"z\"}]}]"
     );
 }
@@ -295,7 +295,7 @@ fn a_clear_rides_the_entry() {
 
     page.buffer(1, &[run("normal", 0, "after")], true).unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
     let entry = update.get("content").and_then(Value::as_list).unwrap()[0]
         .as_object()
         .unwrap();
@@ -309,7 +309,7 @@ fn a_clear_rides_the_entry() {
     declare(&mut page, 1, BOX);
     page.buffer(1, &[], true).unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("content").unwrap()),
@@ -321,7 +321,7 @@ fn a_clear_rides_the_entry() {
     page.buffer(1, &[run("normal", 0, "")], false).unwrap();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 }
@@ -346,7 +346,7 @@ fn runs_wear_style_and_link() {
     .unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"header\",\"text\":\"H\"},\
          {\"style\":\"normal\",\"text\":\"link\",\"hyperlink\":3},\
          {\"style\":\"normal\",\"text\":\"ab\"}]}]"
@@ -376,7 +376,7 @@ fn a_flow_break_flags_what_follows() {
     .unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"content\":[{\"style\":\"normal\",\"text\":\"para\"}]},\
          {\"flowbreak\":true,\"content\":[{\"style\":\"normal\",\"text\":\"below\"}]}]"
     );
@@ -389,7 +389,7 @@ fn a_flow_break_flags_what_follows() {
     page.buffer(1, &[run("normal", 0, "later")], false).unwrap();
 
     assert_eq!(
-        spans(&page.update(false, false).unwrap()),
+        spans(&page.update(false, false, None).unwrap()),
         "[{\"flowbreak\":true,\"content\":[{\"style\":\"normal\",\"text\":\"later\"}]}]"
     );
 }
@@ -409,7 +409,7 @@ fn a_grid_sends_only_changed_rows() {
 
     page.grid(1, &face).unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("content").unwrap()),
@@ -421,7 +421,7 @@ fn a_grid_sends_only_changed_rows() {
     page.grid(1, &face).unwrap();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 
@@ -429,7 +429,7 @@ fn a_grid_sends_only_changed_rows() {
     page.grid(1, &[vec![], vec![TextRun::new("alert", 0, "!  ")], vec![]])
         .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
     let lines = update.get("content").and_then(Value::as_list).unwrap()[0]
         .as_object()
         .unwrap()
@@ -451,12 +451,12 @@ fn a_resized_grid_resends_its_rows() {
     let face = vec![vec![TextRun::new("normal", 0, "steady")], vec![], vec![]];
 
     page.grid(1, &face).unwrap();
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
 
     declare_grid(&mut page, 1, (0, 0, 640, 20), (80, 2));
     page.grid(1, &face[..2]).unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         update.get("windows").and_then(Value::as_list).unwrap()[0]
@@ -498,7 +498,7 @@ fn a_line_input_posts_and_carries() {
     )
     .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -521,7 +521,7 @@ fn a_line_input_posts_and_carries() {
     page.buffer(2, &[run("normal", 0, "elsewhere")], false)
         .unwrap();
 
-    let carried = page.update(false, false).unwrap();
+    let carried = page.update(false, false, None).unwrap();
 
     assert!(!carried.contains("input"));
     assert_eq!(carried.get("gen"), Some(&Value::Int(2)));
@@ -553,7 +553,7 @@ fn content_recreates_a_carried_field() {
     page.buffer(1, &[run("input", 0, "go north\n")], false)
         .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -580,7 +580,7 @@ fn changed_parameters_recreate_the_field() {
     )
     .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -598,13 +598,13 @@ fn cancelling_fields_resends_the_roster() {
     declare(&mut page, 2, TOP);
     page.char_input(1, None, false, false).unwrap();
     page.char_input(2, None, false, false).unwrap();
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
 
     declare(&mut page, 1, BOX);
     declare(&mut page, 2, TOP);
     page.char_input(1, None, false, false).unwrap();
 
-    let fewer = page.update(false, false).unwrap();
+    let fewer = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(fewer.get("input").unwrap()),
@@ -614,7 +614,7 @@ fn cancelling_fields_resends_the_roster() {
     declare(&mut page, 1, BOX);
     declare(&mut page, 2, TOP);
 
-    let empty = page.update(false, false).unwrap();
+    let empty = page.update(false, false, None).unwrap();
 
     assert_eq!(shown(empty.get("input").unwrap()), "[]");
 }
@@ -641,7 +641,7 @@ fn char_and_passive_entries() {
     page.char_input(1, Some((3, 0)), false, false).unwrap();
     page.passive_input(2, true, true).unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -653,7 +653,7 @@ fn char_and_passive_entries() {
 
     quiet.passive_input(1, false, false).unwrap();
 
-    assert!(!quiet.update(false, false).unwrap().contains("input"));
+    assert!(!quiet.update(false, false, None).unwrap().contains("input"));
 }
 
 // The timer travels when it changes, as null when it stops, not
@@ -667,7 +667,7 @@ fn the_timer_travels_only_on_change() {
     page.timer(100, false);
 
     assert_eq!(
-        page.update(false, false).unwrap().get("timer"),
+        page.update(false, false, None).unwrap().get("timer"),
         Some(&Value::Int(100))
     );
 
@@ -675,7 +675,7 @@ fn the_timer_travels_only_on_change() {
     page.timer(100, false);
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 
@@ -683,7 +683,7 @@ fn the_timer_travels_only_on_change() {
     page.timer(100, true);
 
     assert_eq!(
-        page.update(false, false).unwrap().get("timer"),
+        page.update(false, false, None).unwrap().get("timer"),
         Some(&Value::Int(100))
     );
 
@@ -691,7 +691,7 @@ fn the_timer_travels_only_on_change() {
     page.timer(0, false);
 
     assert_eq!(
-        page.update(false, false).unwrap().get("timer"),
+        page.update(false, false, None).unwrap().get("timer"),
         Some(&Value::Null)
     );
 
@@ -699,7 +699,7 @@ fn the_timer_travels_only_on_change() {
     page.timer(0, false);
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 }
@@ -743,7 +743,7 @@ fn draw_ops_travel_in_order() {
     )
     .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("content").unwrap()),
@@ -801,7 +801,7 @@ fn stage_ops_travel_and_validate() {
     )
     .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert!(
         update.get("windows").and_then(Value::as_list).unwrap()[0]
@@ -883,7 +883,7 @@ fn the_stage_editor_is_placed() {
     )
     .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
     let list = update.get("input").and_then(Value::as_list).unwrap();
     let entry = list[0].as_object().unwrap();
 
@@ -907,7 +907,7 @@ fn the_stage_editor_is_placed() {
         .unwrap();
 
     let error = blind
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("no cursor")
         .to_string();
 
@@ -928,7 +928,7 @@ fn the_stage_editor_is_placed() {
         .unwrap();
 
     let error = celless
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("no cell")
         .to_string();
 
@@ -950,7 +950,7 @@ fn the_stage_editor_is_placed() {
         .unwrap();
 
     let error = grounded
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("no stage")
         .to_string();
 
@@ -967,7 +967,7 @@ fn contradictory_cycles_are_refused() {
     page.buffer(9, &[run("normal", 0, "lost")], false).unwrap();
 
     let error = page
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("undeclared")
         .to_string();
 
@@ -978,7 +978,7 @@ fn contradictory_cycles_are_refused() {
     unasked.char_input(9, None, false, false).unwrap();
 
     let error = unasked
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("unasked")
         .to_string();
 
@@ -996,7 +996,7 @@ fn contradictory_cycles_are_refused() {
     rowed.grid(1, &[vec![]]).unwrap();
 
     let error = rowed
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("not a grid")
         .to_string();
 
@@ -1007,7 +1007,7 @@ fn contradictory_cycles_are_refused() {
     clicked.char_input(1, None, false, true).unwrap();
 
     let error = clicked
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("clicked")
         .to_string();
 
@@ -1019,7 +1019,7 @@ fn contradictory_cycles_are_refused() {
     blind.char_input(1, None, false, false).unwrap();
 
     let error = blind
-        .update(false, false)
+        .update(false, false, None)
         .expect_err("cursorless")
         .to_string();
 
@@ -1084,7 +1084,7 @@ fn typing_survives_a_fields_regeneration() {
     let mut page = buffered();
 
     page.line_input(1, 80, LineSpec::default()).unwrap();
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
 
     page.typed(std::collections::HashMap::from([(1, "go nor".to_string())]));
 
@@ -1092,7 +1092,7 @@ fn typing_survives_a_fields_regeneration() {
     page.line_input(1, 80, LineSpec::default()).unwrap();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 
@@ -1101,7 +1101,7 @@ fn typing_survives_a_fields_regeneration() {
     page.buffer(1, &[run("normal", 0, "The clock strikes.\n")], false)
         .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -1113,7 +1113,7 @@ fn typing_survives_a_fields_regeneration() {
     page.line_input(1, 80, LineSpec::default()).unwrap();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"pass\"}"
     );
 
@@ -1123,7 +1123,7 @@ fn typing_survives_a_fields_regeneration() {
     page.buffer(1, &[run("normal", 0, "Later.\n")], false)
         .unwrap();
 
-    let update = page.update(false, false).unwrap();
+    let update = page.update(false, false, None).unwrap();
 
     assert_eq!(
         shown(update.get("input").unwrap()),
@@ -1138,12 +1138,12 @@ fn typing_survives_a_fields_regeneration() {
 fn a_file_ask_rides_the_update() {
     let mut page = buffered();
 
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
     declare(&mut page, 1, BOX);
     page.prompt("write", "save").unwrap();
 
     assert_eq!(
-        told(&page.update(false, false).unwrap()),
+        told(&page.update(false, false, None).unwrap()),
         "{\"type\":\"update\",\"gen\":2,\"specialinput\":\
          {\"type\":\"fileref_prompt\",\"filemode\":\"write\",\
          \"filetype\":\"save\"}}"
@@ -1163,11 +1163,11 @@ fn a_file_ask_rides_the_update() {
 fn exit_forces_a_real_update() {
     let mut page = buffered();
 
-    page.update(false, false).unwrap();
+    page.update(false, false, None).unwrap();
     declare(&mut page, 1, BOX);
 
     assert_eq!(
-        told(&page.update(true, false).unwrap()),
+        told(&page.update(true, false, None).unwrap()),
         "{\"type\":\"update\",\"gen\":2,\"exit\":true}"
     );
 }
@@ -1265,4 +1265,62 @@ fn stanzas_read_and_write() {
     write_stanza(&mut out, &told_stanza);
 
     assert_eq!(out, b"{\"type\":\"pass\"}\n");
+}
+
+// The voxam sidecar rides a real update between the sounds and the
+// exit flag, granted by the caller alone; None leaves the stanza
+// untouched, and a cycle where nothing changed stays the pass --
+// the sidecar never forces an update (PORT: What the sidecar
+// carries).
+#[test]
+fn the_voxam_block_rides_the_update() {
+    let mut page = Page::new();
+
+    page.window(1, "buffer", 0, (0, 0, 640, 400), WindowSpec::default())
+        .unwrap();
+
+    let mut block = Object::new();
+
+    block.set("command", "north");
+
+    let update = page.update(false, false, Some(block.clone())).unwrap();
+
+    assert_eq!(
+        dumps(update.get("voxam").unwrap()),
+        r#"{"command":"north"}"#
+    );
+    assert_eq!(update.iter().last().map(|(key, _)| key), Some("voxam"));
+
+    page.window(1, "buffer", 0, (0, 0, 640, 400), WindowSpec::default())
+        .unwrap();
+
+    assert_eq!(
+        told(&page.update(false, false, Some(block)).unwrap()),
+        r#"{"type":"pass"}"#
+    );
+
+    let mut ended = Page::new();
+
+    ended
+        .window(1, "buffer", 0, (0, 0, 640, 400), WindowSpec::default())
+        .unwrap();
+
+    let told_whole = ended.update(true, false, Some(Object::new())).unwrap();
+    let keys: Vec<&str> = told_whole.iter().map(|(key, _)| key).collect();
+
+    assert_eq!(&keys[keys.len() - 2..], ["voxam", "exit"]);
+
+    let mut plain = Page::new();
+
+    plain
+        .window(1, "buffer", 0, (0, 0, 640, 400), WindowSpec::default())
+        .unwrap();
+
+    assert!(
+        plain
+            .update(false, false, None)
+            .unwrap()
+            .get("voxam")
+            .is_none()
+    );
 }

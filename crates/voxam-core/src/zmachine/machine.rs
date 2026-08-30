@@ -180,6 +180,21 @@ pub fn signed(value: u16) -> i32 {
     }
 }
 
+/// The sidecar's honest facts (§8.2): where the player stands and
+/// how the tally reads, None where a machine cannot honestly say
+/// (PORT: What the sidecar carries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bearings {
+    /// The object the first global names and its short name, or
+    /// None when the global names no decodable object.
+    pub location: Option<(u16, String)>,
+    /// The second global, signed -- None in a time game, whose
+    /// globals are the clock.
+    pub score: Option<i32>,
+    /// The third global -- None in a time game.
+    pub turns: Option<u16>,
+}
+
 /// Who the interpreter claims to be (§11.1.3, §11.1.4).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Identity {
@@ -290,6 +305,11 @@ pub struct Machine {
     /// Whether the story window (window 0) is selected: the only
     /// window whose text belongs in a transcript (§7.1.1).
     story_window: bool,
+    /// The sidecar's one honest bit: this state of play does not
+    /// follow causally from the last command -- an undo, a
+    /// restore, or a restart intervened. The wire face reads it
+    /// once and rests it (PORT: What the sidecar carries).
+    pub discontinuity: bool,
     // Cursor moves aimed at unselected stage windows: the move
     // reaches the stage when that window is next selected
     // (§8.8.3.5) -- until then the ledger holds it alone.
@@ -362,6 +382,7 @@ impl Machine {
             font: NORMAL_FONT,
             recording_commands: false,
             file_input: false,
+            discontinuity: false,
             aimed: std::collections::HashSet::new(),
             windows: WindowLedger::new(
                 u16::from(frontend_lines) * font_height,
@@ -519,6 +540,8 @@ impl Machine {
         self.memory.write_word(FLAGS_2, flags2)?;
         self.calls.restore(&snapshot.frames)?;
         self.pc = snapshot.pc;
+        // Every full-state write-back is a discontinuity.
+        self.discontinuity = true;
         self.declare_capabilities()
     }
 
@@ -1765,6 +1788,54 @@ impl Machine {
     }
 
     /// Assemble what the status line shows (§8.2).
+    /// The wire sidecar's honest §8.2 facts, gathered gently.
+    ///
+    /// The location is the object the first global names with its
+    /// short name -- guaranteed through Version 3 (§8.2.2) and
+    /// Inform convention after -- so a value naming no decodable
+    /// object simply answers None rather than a halt: the sidecar
+    /// is a courtesy feed, never a gate. The score and turns are
+    /// the next two globals, score games only: a time game's
+    /// globals are the clock (§8.2.3), which is no score at all.
+    pub fn bearings(&mut self) -> Result<Bearings, VoxamError> {
+        let location = self
+            .variables
+            .read(&self.memory, &mut self.calls, 0x10)
+            .ok()
+            .filter(|&number| number != 0)
+            .and_then(|number| {
+                let name = self
+                    .objects
+                    .short_name_address(&self.memory, number)
+                    .and_then(|address| decode_units(&self.memory, address))
+                    .map(|(units, _)| units_to_string(&units));
+
+                name.ok().map(|name| (number, name))
+            });
+
+        // The clock bit exists only where the status line does
+        // (§8.2.3.2); later versions read as score games.
+        if self.memory.header().version() <= crate::zmachine::header::STATUS_FLAGS_VERSION
+            && self.memory.header().time_game()?
+        {
+            return Ok(Bearings {
+                location,
+                score: None,
+                turns: None,
+            });
+        }
+
+        Ok(Bearings {
+            location,
+            score: Some(signed(self.variables.read(
+                &self.memory,
+                &mut self.calls,
+                0x11,
+            )?)),
+            turns: Some(self.variables.read(&self.memory, &mut self.calls, 0x12)?),
+        })
+    }
+
     fn status(&mut self) -> Result<Status, VoxamError> {
         let location = self.variables.read(&self.memory, &mut self.calls, 0x10)?;
         let address = self.objects.short_name_address(&self.memory, location)?;
@@ -2309,6 +2380,8 @@ impl Machine {
     /// everything reloads, but 'Flags 2' survives and the Rst
     /// header fields are re-stamped.
     fn op_restart(&mut self) -> Result<(), VoxamError> {
+        self.discontinuity = true;
+
         let flags2 = self.memory.read_word(FLAGS_2)?;
         let static_base = usize::from(self.story.header().static_memory_base());
         let pristine = self.story.data()[..static_base].to_vec();

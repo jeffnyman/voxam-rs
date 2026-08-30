@@ -828,7 +828,12 @@ impl Page {
     /// row, standing input fields are stamped anew, and a running
     /// timer is renamed -- an ordinary update in form, complete
     /// in content (GlkOte: the refresh input event).
-    pub fn update(&mut self, exit: bool, refresh: bool) -> Result<Object, VoxamError> {
+    pub fn update(
+        &mut self,
+        exit: bool,
+        refresh: bool,
+        voxam: Option<Object>,
+    ) -> Result<Object, VoxamError> {
         self.validated()?;
 
         let windows: Vec<Object> = self
@@ -933,6 +938,14 @@ impl Page {
                         .collect(),
                 ),
             );
+        }
+
+        // The sidecar's dumb factual feed, granted by the
+        // display's own "voxam" support token, rides every real
+        // update and never forces one: an unchanged cycle stays
+        // the pass (PORT: What the sidecar carries).
+        if let Some(voxam) = voxam {
+            stanza.set("voxam", voxam);
         }
 
         if exit {

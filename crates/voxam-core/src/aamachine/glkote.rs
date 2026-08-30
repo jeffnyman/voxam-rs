@@ -339,6 +339,11 @@ pub struct GlkOteFrontend {
     mark: usize,
     size: (i64, i64),
     refresh: bool,
+    // The sidecar seam: granted by the display's "voxam" token,
+    // carrying the last line this face delivered (PORT: What the
+    // sidecar carries).
+    speaks_voxam: bool,
+    last_command: Option<String>,
     outfit: Outfit,
     opening: Vec<Run>,
 }
@@ -354,6 +359,8 @@ impl GlkOteFrontend {
             refresh: false,
             outfit: PLAIN,
             opening: carded(story),
+            speaks_voxam: false,
+            last_command: None,
         }
     }
 
@@ -379,6 +386,10 @@ impl GlkOteFrontend {
         // Color is the dialect's own word: per-span ink travels
         // only to a display that says it renders it, the same
         // grant the Z-Machine's colors ride (Aa-machine: VM_INFO).
+        self.speaks_voxam = match stanza.get("support") {
+            Some(Value::List(held)) => held.iter().any(|word| word.as_str() == Some("voxam")),
+            _ => false,
+        };
         voice.has_color = match stanza.get("support") {
             Some(Value::List(held)) => held.iter().any(|word| word.as_str() == Some("colors")),
             _ => false,
@@ -389,6 +400,41 @@ impl GlkOteFrontend {
 
     /// Compose everything told since the last update.
     pub fn render(&mut self, voice: &mut WireVoice, exit: bool) -> Result<Object, VoxamError> {
+        self.render_with(voice, exit, None)
+    }
+
+    /// The voxam block, the Å-machine's honest share of it: no
+    /// location or score registers to read, so only the wire's own
+    /// facts travel -- the last delivered line and the machine's
+    /// discontinuity bit, read once and rested, handed in by the
+    /// serving loop (PORT: What the sidecar carries).
+    pub fn sidecar(&mut self, discontinuity: &mut bool) -> Option<Object> {
+        if !self.speaks_voxam {
+            return None;
+        }
+
+        let mut block = Object::new();
+
+        if let Some(command) = self.last_command.clone() {
+            block.set("command", command);
+        }
+
+        if *discontinuity {
+            *discontinuity = false;
+            block.set("discontinuity", true);
+        }
+
+        Some(block)
+    }
+
+    /// The reference's render carries a default voxam argument;
+    /// Rust spells the default as this delegating pair.
+    pub fn render_with(
+        &mut self,
+        voice: &mut WireVoice,
+        exit: bool,
+        voxam: Option<Object>,
+    ) -> Result<Object, VoxamError> {
         let (width, height) = self.size;
 
         self.page.window(
@@ -438,7 +484,7 @@ impl GlkOteFrontend {
 
         let refresh = std::mem::replace(&mut self.refresh, false);
 
-        self.page.update(exit, refresh)
+        self.page.update(exit, refresh, voxam)
     }
 
     /// Translate one event; a delivery runs the machine on.
@@ -489,6 +535,7 @@ impl GlkOteFrontend {
 
             machine.voice.prompted();
             self.waiting = Some(machine.deliver_line(&value)?);
+            self.last_command = Some(value);
 
             return Ok(Verdict::Advance);
         }
@@ -648,7 +695,8 @@ fn served(
 
     loop {
         let exit = face.waiting == Some(Wait::Quit);
-        let update = face.render(&mut machine.voice, exit)?;
+        let voxam = face.sidecar(&mut machine.discontinuity);
+        let update = face.render_with(&mut machine.voice, exit, voxam)?;
 
         write_stanza(writer, &update);
 
@@ -664,7 +712,8 @@ fn served(
             match face.accept(&mut machine, &stanza)? {
                 Verdict::Advance => break,
                 Verdict::Stand => {
-                    let update = face.render(&mut machine.voice, false)?;
+                    let voxam = face.sidecar(&mut machine.discontinuity);
+                    let update = face.render_with(&mut machine.voice, false, voxam)?;
 
                     write_stanza(writer, &update);
                 }

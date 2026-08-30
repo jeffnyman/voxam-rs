@@ -268,6 +268,11 @@ pub struct GlkOteFrontend {
     // seam that differs branches on it -- the reference's subclass
     // override, the borrow's way around.
     stage: Option<StageHalf>,
+    // The sidecar seam: granted by the display's "voxam" token,
+    // carrying the last line this face delivered (PORT: What the
+    // sidecar carries).
+    speaks_voxam: bool,
+    last_command: Option<String>,
 }
 
 impl GlkOteFrontend {
@@ -304,6 +309,8 @@ impl GlkOteFrontend {
             has_sounds: false,
             fault: None,
             stage: None,
+            speaks_voxam: false,
+            last_command: None,
         }
     }
 
@@ -439,6 +446,7 @@ impl GlkOteFrontend {
         }
 
         self.has_timed_input = supports("timer");
+        self.speaks_voxam = supports("voxam");
         self.speaks_sound = supports("sound");
         self.has_sounds = self.speaks_sound
             && self
@@ -727,6 +735,7 @@ impl GlkOteFrontend {
             .is_some_and(|held| held.blorb.is_some());
 
         self.has_timed_input = supports("timer");
+        self.speaks_voxam = supports("voxam");
 
         // The band's claim is honest twice over: pictures must
         // actually hang behind the story, and the display must
@@ -1744,6 +1753,7 @@ impl Session {
             return self.render_staged(exit);
         }
 
+        let voxam = self.sidecar()?;
         let mut face = self.face.borrow_mut();
         let (width, height) = face.size;
         let (_, cell_h) = face.cell;
@@ -1884,7 +1894,7 @@ impl Session {
 
         let refresh = std::mem::replace(&mut face.refresh_owed, false);
 
-        face.page.update(exit, refresh)
+        face.page.update(exit, refresh, voxam)
     }
 
     /// Compose the stage into one scaled canvas update.
@@ -1894,6 +1904,7 @@ impl Session {
     /// true order, and a repaint replays the journal -- everything
     /// since the last whole-stage fill.
     fn render_staged(&mut self, exit: bool) -> Result<Object, VoxamError> {
+        let voxam = self.sidecar()?;
         let mut face = self.face.borrow_mut();
         let (width, height) = face.size;
         let logical = face.stage_logical();
@@ -1997,7 +2008,51 @@ impl Session {
         clocked(&self.machine, &mut self.last_read, &mut face);
         face.sung();
 
-        face.page.update(exit, refresh)
+        face.page.update(exit, refresh, voxam)
+    }
+
+    /// The voxam block: the deluxe features' dumb factual feed.
+    ///
+    /// Location, score, and turns come from the machine's honest
+    /// bearings; the command is the last line this face delivered
+    /// -- the wire knows what it handed over -- and the
+    /// discontinuity bit reports an undo, restore, or restart
+    /// since the last update, read once and rested (PORT: What
+    /// the sidecar carries).
+    fn sidecar(&mut self) -> Result<Option<Object>, VoxamError> {
+        if !self.face.borrow().speaks_voxam {
+            return Ok(None);
+        }
+
+        let bearings = self.machine.bearings()?;
+        let mut block = Object::new();
+
+        if let Some((number, name)) = bearings.location {
+            let mut held = Object::new();
+
+            held.set("object", i64::from(number));
+            held.set("name", name);
+            block.set("location", held);
+        }
+
+        if let Some(score) = bearings.score {
+            block.set("score", i64::from(score));
+        }
+
+        if let Some(turns) = bearings.turns {
+            block.set("turns", i64::from(turns));
+        }
+
+        if let Some(command) = self.face.borrow().last_command.clone() {
+            block.set("command", command);
+        }
+
+        if self.machine.discontinuity {
+            self.machine.discontinuity = false;
+            block.set("discontinuity", true);
+        }
+
+        Ok(Some(block))
     }
 
     /// Translate one inbound stanza into a serving verdict.
@@ -2100,6 +2155,7 @@ impl Session {
         }
 
         self.machine.deliver_line(&line, terminator)?;
+        self.face.borrow_mut().last_command = Some(line);
 
         Ok(Verdict::Advance)
     }

@@ -228,6 +228,10 @@ pub struct Machine<V: Voice> {
     pub voice: V,
     /// False once the story has quit.
     pub running: bool,
+    /// The sidecar's one honest bit: an undo, restore, or restart
+    /// broke the causal thread; the wire face reads it once and
+    /// rests it (PORT: What the sidecar carries).
+    pub discontinuity: bool,
     seed: Option<u32>,
     speech: Speech,
     major: u8,
@@ -303,6 +307,7 @@ impl<V: Voice> Machine<V> {
             unspaced_after: HashSet::new(),
             sought: sought(&dict),
             running: true,
+            discontinuity: false,
             seed,
             regs: vec![0; 64],
             inst: 1,
@@ -3384,6 +3389,8 @@ impl<V: Voice> Machine<V> {
 
     /// RESTART: the whole game state reborn (Aa-machine: RESTART).
     fn ext_restart(&mut self) {
+        self.discontinuity = true;
+
         self.cleared_divs();
         self.reset(0, true);
 
@@ -3412,6 +3419,8 @@ impl<V: Voice> Machine<V> {
             return;
         };
 
+        self.discontinuity = true;
+
         self.restored(&state);
         self.voice.leave_all();
         self.in_status = 0;
@@ -3426,6 +3435,8 @@ impl<V: Voice> Machine<V> {
     /// UNDO: step back to the last kept moment (Aa-machine: UNDO).
     fn ext_undo(&mut self) -> Fall<()> {
         if let Some(state) = self.undo.pop() {
+            self.discontinuity = true;
+
             self.cleared_divs();
             self.restored(&state);
         } else if !self.pruned {
