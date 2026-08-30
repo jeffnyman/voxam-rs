@@ -155,9 +155,12 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    text scattered over old prompts -- and a cover note printed to
    stdout was wiped the instant the glass cleared, so it now
    writes through the screen model and stands on the story's first
-   screen. Both are pinned by a ConPTY harness that replays real
-   sessions onto a virtual screen, dirty-screen scenario included
-   -- the milestone's filmstrip, arrived at last. The eyes pass
+   screen. Both are pinned by the glass drill sweep
+   (`certify/glass-diff.sh`): real sessions in a Windows
+   pseudo-console, the VT stream replayed onto a virtual screen
+   and judged as a player would see it, dirty-screen scenario
+   included -- the milestone's filmstrip, arrived at last and
+   kept. The eyes pass
    also asked after Beyond Zork's colours: with the default
    IBM-PC identity the reference painter is exactly as monochrome
    through the same screens, and the real key is the §11.1.3
