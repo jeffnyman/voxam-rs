@@ -131,10 +131,10 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    reference first and ported in kind, rides every one of those
    sessions again under its own token-granted sweep, still
    byte-identical.
-6. **The painted terminal.** ratatui glass for all three machines.
-   *Gate:* filmstrip comparisons where determinism allows; eyes
-   otherwise. *Standing, gate half-met (2026-08-30):* the glass is
-   built and wired -- the Z painter over the §8 screen model, the
+6. **The painted terminal.** ✅ *(2026-08-30)* ratatui glass
+   for all three machines. *Gate met:* filmstrip comparisons
+   where determinism allows, eyes otherwise -- both walked. The
+   glass is built and wired -- the Z painter over the §8 screen model, the
    Glk display over the window tree, the line editor and both
    keystroke intakes, the painted face the CLI's default at a real
    terminal with `--plain` keeping the stream (the Å-machine's
@@ -144,10 +144,10 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    TestBackend grids, a corpus Zork I session serves end to end
    onto the test glass through the real loop, and every stanza and
    replay sweep still runs byte-identical around the new flag
-   surface. The other half is eyes at a live terminal -- Beyond
-   Zork's font-3 map, Border Zone's ticking reads, a paged
-   Bureaucracy wall, glulxercise at the Glk glass -- and the ✅
-   waits for it. The first eyes pass caught what the batteries
+   surface. The other half was eyes at a live
+   terminal -- Beyond Zork's font-3 map and colours, Border
+   Zone's ticking reads, Scroll Thief at the Glk glass -- and
+   they earned their keep: the first eyes pass caught what the batteries
    could not and each finding closed the same day: the Glk glass
    was missing its backend clear -- painting blanks onto ratatui's
    already-blank model emits nothing, so the shell showed through
@@ -171,7 +171,14 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    the same colours under `--interpreter amiga` (the painter
    spells the classic dim SGR family, blessed's own shades). The sixel cover road shipped with
    the pass: `--pixels` draws a Blorb cover in real pixels on a
-   terminal that speaks sixel (Windows Terminal 1.22+). Deferred
+   terminal that speaks sixel (Windows Terminal 1.22+). The
+   pass's deepest find was Border Zone: the two implementations
+   proved identical to the game-second -- same ticks, same
+   clocks, same screens, fast-forwarded side by side -- up to the
+   planned scenes that read input from inside the clock
+   interrupt, which the port then learned as the interrupt-frame
+   departure below; the espionage now plays whole, trench-coat
+   man and all, pinned by its own drill. Deferred
    within the milestone, each honestly claimed away: the speaker
    (no sound at the glass yet), terminal mouse reporting, the
    recording seams, and sixel *detection* -- the reference asks
@@ -366,6 +373,21 @@ sweeps prove the outputs identical across all of them.
   one; and `prompt_file` widened to take the window map -- the
   tree-walk reshaping -- so the interrupted layout repaints once
   the prompt is answered.
+- **Interrupt routines that read park in frames.** The §15
+  timed-read interrupt is the suspension departure's hardest
+  case: Border Zone's planned scenes print -- and sometimes
+  prompt -- from inside the clock routine, which the reference
+  handles by blocking recursion. Here a delivered tick runs the
+  routine on a frame ledger: if a read suspends inside it, the
+  routine's stack stays put, the inner read parks as the
+  machine's wait for the host to serve like any other, and the
+  outer read is held aside in the frame until the routine
+  unwinds -- then its verdict restores or abandons the outer
+  read, exactly as §15 asks. The glass serving loop follows by
+  wait serial: a tick that parks a new read hands it back to the
+  loop fresh, and the §15 redisplay courtesy returns the
+  composed line below the scene once it is done. The trench-coat
+  drill holds the whole nesting to Border Zone itself.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes

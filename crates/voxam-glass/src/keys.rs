@@ -112,7 +112,12 @@ impl ScriptedKeys {
 
 impl KeySource for ScriptedKeys {
     fn key(&mut self, timeout: Option<Duration>) -> Option<char> {
-        self.timeouts.push(timeout);
+        // The record is a test's ledger, not a black box: a
+        // drained script inside a spinning wait would otherwise
+        // grow it without bound.
+        if self.timeouts.len() < 10_000 {
+            self.timeouts.push(timeout);
+        }
 
         if self.keys.is_empty() {
             return None;

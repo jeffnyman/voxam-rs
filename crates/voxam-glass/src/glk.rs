@@ -182,7 +182,11 @@ impl ScriptedCodes {
 
 impl CodeSource for ScriptedCodes {
     fn code(&mut self, timeout: Option<Duration>) -> Fetch {
-        self.timeouts.push(timeout);
+        // Capped for the same reason as the painter's script: a
+        // spinning wait must not grow the ledger without bound.
+        if self.timeouts.len() < 10_000 {
+            self.timeouts.push(timeout);
+        }
 
         if self.codes.is_empty() {
             return Fetch::Ended;

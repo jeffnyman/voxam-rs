@@ -271,6 +271,23 @@ pub enum Waiting {
     File(Filing),
 }
 
+/// One §15 interrupt standing mid-flight: when a read suspends
+/// INSIDE the interrupt routine -- Border Zone's planned scenes
+/// prompt from their own clock ticks -- the routine's frame stays
+/// on the call stack, the inner read parks as the machine's wait,
+/// and the outer read is held aside here until the routine
+/// unwinds and the tick can finish. The reference nests these
+/// through blocking recursion; the suspension departure nests
+/// them through this ledger.
+struct TickFrame {
+    /// The call depth the interrupt routine was entered above:
+    /// the tick finishes when the stack returns to it.
+    floor: usize,
+    /// The read the tick interrupted, restored or abandoned by
+    /// the routine's verdict (§15 read).
+    outer: Reading,
+}
+
 /// What one step did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -322,6 +339,7 @@ pub struct Machine {
     redirections: Vec<(usize, Units, Option<usize>)>,
     undo: VecDeque<Snapshot>,
     waiting: Option<Waiting>,
+    ticking: Vec<TickFrame>,
     wait_serial: u64,
     /// The end-of-sound routine of the sound now playing, and
     /// whether a sound has started since the last keyboard input
@@ -396,6 +414,7 @@ impl Machine {
             redirections: Vec::new(),
             undo: VecDeque::new(),
             waiting: None,
+            ticking: Vec::new(),
             wait_serial: 0,
             pending_keys: VecDeque::new(),
             typist_ready: None,
@@ -586,6 +605,23 @@ impl Machine {
         }
 
         while self.running {
+            // An interrupt frame mid-flight: the inner read was
+            // delivered and execution is climbing back out of the
+            // routine. When the stack returns to the frame's
+            // floor, the tick finishes -- restoring the outer
+            // read, or abandoning it on the routine's say-so.
+            if let Some(frame) = self.ticking.last()
+                && self.calls.depth() == frame.floor
+            {
+                self.finish_tick()?;
+
+                if self.waiting.is_some() {
+                    return Ok(RunState::Waiting);
+                }
+
+                continue;
+            }
+
             if self.step()? == Step::Suspended {
                 return Ok(RunState::Waiting);
             }
@@ -780,33 +816,82 @@ impl Machine {
     /// return -- a quit along the way included -- erases the input
     /// and ends the read the interrupt way.
     pub fn deliver_tick(&mut self) -> Result<(), VoxamError> {
-        let routine = match &self.waiting {
-            Some(Waiting::Read(held)) if held.routine != 0 => held.routine,
-            _ => {
+        let outer = match self.waiting.take() {
+            Some(Waiting::Read(held)) if held.routine != 0 => held,
+            held => {
+                self.waiting = held;
+
                 return Err(instruction_error(
                     "a tick arrived with no timed read suspended to hear it".into(),
                 ));
             }
         };
+        let address = routine_address(&self.memory.header(), outer.routine)?;
+        let routine = Routine::parse(&self.memory, address)?;
+        let floor = self.calls.depth();
 
-        if self.interrupt(routine)? != 0 {
-            let Some(Waiting::Read(waiting)) = self.waiting.take() else {
-                unreachable!("checked above");
+        self.calls.call(&routine, &[], self.pc, Some(0))?;
+        self.pc = routine.first_instruction;
+        self.ticking.push(TickFrame { floor, outer });
+
+        self.run_tick()
+    }
+
+    /// Step the innermost interrupt frame until it unwinds, parks
+    /// a read of its own, or the story quits.
+    ///
+    /// A read inside the routine is Border Zone's planned scenes
+    /// prompting from the clock: it parks as the machine's wait,
+    /// the frame stays, and the host serves it like any other
+    /// read -- run picks the climb-out up afterwards.
+    fn run_tick(&mut self) -> Result<(), VoxamError> {
+        while self.running {
+            let Some(frame) = self.ticking.last() else {
+                return Ok(());
             };
 
-            if waiting.wants == Wants::Line {
-                self.abandoned_line(
-                    &waiting.instruction,
-                    waiting.text_buffer,
-                    waiting.parse_buffer,
-                    waiting.counted,
-                )?;
-            } else {
-                self.abandoned_key(&waiting.instruction)?;
+            if self.calls.depth() == frame.floor {
+                return self.finish_tick();
+            }
+
+            if self.step()? == Step::Suspended {
+                return Ok(());
             }
         }
 
+        // The story quit inside the interrupt: input has
+        // certainly ended, and the frames fall away with the
+        // session.
+        self.ticking.clear();
+
         Ok(())
+    }
+
+    /// Finish one tick: the routine's value decides whether the
+    /// interrupted read stands back up or ends the interrupt way
+    /// (§15 read).
+    fn finish_tick(&mut self) -> Result<(), VoxamError> {
+        let frame = self.ticking.pop().expect("a frame to finish");
+        let verdict = self.variables.read(&self.memory, &mut self.calls, 0)?;
+
+        if verdict == 0 {
+            self.waiting = Some(Waiting::Read(frame.outer));
+
+            return Ok(());
+        }
+
+        let outer = frame.outer;
+
+        if outer.wants == Wants::Line {
+            self.abandoned_line(
+                &outer.instruction,
+                outer.text_buffer,
+                outer.parse_buffer,
+                outer.counted,
+            )
+        } else {
+            self.abandoned_key(&outer.instruction)
+        }
     }
 
     /// Record a click's position in header extension words 1 and 2

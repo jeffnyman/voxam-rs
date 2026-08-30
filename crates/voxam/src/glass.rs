@@ -231,17 +231,22 @@ fn served<B: voxam_glass::ratatui::backend::Backend + 'static>(
     face: &Face<B>,
 ) -> Result<(), VoxamError> {
     loop {
-        let state = machine.run()?;
+        // A read may already stand -- an interrupt's own scene
+        // parked mid-tick, or an outer read restored after one --
+        // and running over it would be refused; only a machine
+        // between waits runs.
+        if machine.waiting().is_none() {
+            let state = machine.run()?;
 
-        surfaced(face)?;
+            surfaced(face)?;
 
-        match state {
-            RunState::Halted => return Ok(()),
-            RunState::Waiting => {
-                attended(machine, face)?;
-                surfaced(face)?;
+            if state == RunState::Halted {
+                return Ok(());
             }
         }
+
+        attended(machine, face)?;
+        surfaced(face)?;
     }
 }
 
@@ -292,34 +297,51 @@ fn attended<B: voxam_glass::ratatui::backend::Backend + 'static>(
         // that printed earns the input line redisplayed -- Jigsaw
         // prints each chapter's epigraph from exactly such a
         // routine.
-        Wants::Line if timed => loop {
-            let line = face.borrow_mut().read_line_until(interval);
+        Wants::Line if timed => {
+            // The §15 redisplay courtesy across a nested scene:
+            // a composed line re-attending after an interrupt's
+            // own read printed returns below the scene first.
+            face.borrow_mut().resume_if_interrupted();
 
-            match line {
-                Some(line) => {
-                    machine.deliver_line(&line, 0)?;
+            loop {
+                let line = face.borrow_mut().read_line_until(interval);
 
-                    return Ok(());
-                }
-                None => {
-                    face.borrow_mut().begin_input();
-
-                    let before = face.borrow().prints;
-
-                    machine.deliver_tick()?;
-
-                    if machine.waiting().is_none() {
-                        face.borrow_mut().abandon_input();
+                match line {
+                    Some(line) => {
+                        machine.deliver_line(&line, 0)?;
 
                         return Ok(());
                     }
+                    None => {
+                        face.borrow_mut().begin_input();
 
-                    if face.borrow().prints != before {
-                        face.borrow_mut().resume_input();
+                        let serial = machine.wait_serial();
+                        let before = face.borrow().prints;
+
+                        machine.deliver_tick()?;
+
+                        if machine.waiting().is_none() {
+                            face.borrow_mut().abandon_input();
+
+                            return Ok(());
+                        }
+
+                        if machine.wait_serial() != serial {
+                            // The interrupt parked a read of its
+                            // own -- Border Zone's planned scenes
+                            // prompt from their clock ticks. The
+                            // composed line stays; the scene's
+                            // read is served fresh.
+                            return Ok(());
+                        }
+
+                        if face.borrow().prints != before {
+                            face.borrow_mut().resume_input();
+                        }
                     }
                 }
             }
-        },
+        }
         Wants::Line => {
             let line = face.borrow_mut().read_line();
 
@@ -338,9 +360,11 @@ fn attended<B: voxam_glass::ratatui::backend::Backend + 'static>(
                     }
                 }
                 None => {
+                    let serial = machine.wait_serial();
+
                     machine.deliver_tick()?;
 
-                    if machine.waiting().is_none() {
+                    if machine.waiting().is_none() || machine.wait_serial() != serial {
                         return Ok(());
                     }
                 }

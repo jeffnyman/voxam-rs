@@ -76,3 +76,66 @@ fn zork_plays_on_the_glass_to_its_end() {
     assert!(whole.contains(">look"));
     assert!(whole.contains(">quit"));
 }
+
+// Border Zone's planned scenes fire from inside the clock
+// interrupt: walk into the passageway, let the ticks come, and
+// the trench-coat man arrives above the standing prompt -- the
+// interrupt-frame nesting that lets a §15 routine print, and
+// even read, mid-wait. Ticks are delivered directly, so a
+// two-game-minute wait costs no real time.
+#[test]
+fn border_zones_planned_scenes_fire_through_the_interrupt() {
+    let bytes = std::fs::read("../../entharion/zcode-infocom/borderzone-r9-s871008.z5")
+        .expect("the corpus story beside the workspace");
+    let story = Story::new(bytes).expect("a loadable story");
+    let terminal = Terminal::new(TestBackend::new(80, 24)).expect("a test terminal");
+    let glass = Rc::new(RefCell::new(Glass::new(
+        terminal,
+        Box::new(ScriptedKeys::new(vec![Some(' '); 40])),
+        Box::new(|| ()),
+    )));
+    let face: Face<TestBackend> = Rc::new(RefCell::new(ScreenFrontend::new(5, glass)));
+    let mut machine = Machine::new(
+        story,
+        Box::new(PaintedHalf(Rc::clone(&face))),
+        Some(1),
+        Identity::default(),
+        None,
+    )
+    .expect("a bootable machine");
+
+    assert_eq!(
+        machine.run().expect("a running machine"),
+        voxam_core::zmachine::machine::RunState::Waiting
+    );
+    machine.deliver_key('1').expect("chapter 1 chosen");
+    assert_eq!(
+        machine.run().expect("a running machine"),
+        voxam_core::zmachine::machine::RunState::Waiting
+    );
+    machine
+        .deliver_line("east", 0)
+        .expect("a step into the passageway");
+    assert_eq!(
+        machine.run().expect("a running machine"),
+        voxam_core::zmachine::machine::RunState::Waiting
+    );
+
+    for _ in 0..150 {
+        face.borrow_mut().begin_input();
+        machine.deliver_tick().expect("a delivered tick");
+
+        assert!(
+            machine.waiting().is_some(),
+            "the read stands through every scene"
+        );
+
+        let seen = face.borrow_mut().model.rendered();
+
+        if seen.contains("trench coat") {
+            return;
+        }
+    }
+
+    panic!("the trench-coat man never arrived");
+}

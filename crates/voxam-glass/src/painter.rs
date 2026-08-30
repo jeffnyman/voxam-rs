@@ -585,6 +585,8 @@ pub struct ScreenFrontend<B: Backend> {
     /// across a timed read's interrupt to honour §15's redisplay
     /// remark, as the reference's machine counts its own.
     pub prints: usize,
+    /// The tally begin_input last saw, the redisplay's baseline.
+    begun_prints: usize,
     /// The first model refusal, kept for the session to surface.
     pub fault: Option<VoxamError>,
 }
@@ -613,6 +615,7 @@ impl<B: Backend + 'static> ScreenFrontend<B> {
             composing: false,
             prompt: String::new(),
             prints: 0,
+            begun_prints: 0,
             fault: None,
         }
     }
@@ -637,11 +640,25 @@ impl<B: Backend + 'static> ScreenFrontend<B> {
     }
 
     /// Remember the prompt: the line's text left of the cursor.
+    /// The prints tally rides along, so the §15 redisplay
+    /// courtesy can tell later whether the interrupt printed.
     pub fn begin_input(&mut self) {
         let (row, column) = self.model.cursor();
         let text = self.model.row_text(row);
 
         self.prompt = text.chars().take(column - 1).collect();
+        self.begun_prints = self.prints;
+    }
+
+    /// The §15 redisplay courtesy, owed across a nested scene:
+    /// when a composed read re-attends after an interrupt's own
+    /// read printed, the input line returns below the scene --
+    /// once.
+    pub fn resume_if_interrupted(&mut self) {
+        if self.composing && self.prints != self.begun_prints {
+            self.begun_prints = self.prints;
+            self.resume_input();
+        }
     }
 
     /// Show the prompt again after a printing interrupt.
