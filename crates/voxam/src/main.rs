@@ -6,6 +6,7 @@
 
 mod accept;
 mod glance;
+mod glass;
 mod web;
 
 use std::io::BufRead;
@@ -44,23 +45,53 @@ fn main() -> ExitCode {
         [flag, story] if flag == "--header" => header_report(story),
         [flag, story] if flag == "--babel" => babel_report(story),
         [flag, script] if flag == "--accept" => accepted_session(script),
-        [story] if !story.starts_with("--") => play(story, None),
-        [seed_flag, seed, story] if seed_flag == "--seed" => match seed.parse::<u32>() {
-            Ok(seed) => play(story, Some(seed)),
-            Err(_) => {
-                eprintln!("voxam: --seed takes a number, not {seed:?}");
-                ExitCode::from(EXIT_UNUSABLE)
+        _ => plays(&arguments),
+    }
+}
+
+/// Parse a play request: the story, its seed, and whether the
+/// plain stream was asked for by name. The painted terminal is
+/// the default face at a real terminal; `--plain` keeps the
+/// stream, which is always there.
+fn plays(arguments: &[String]) -> ExitCode {
+    let mut plain = false;
+    let mut seed: Option<u32> = None;
+    let mut story: Option<String> = None;
+    let mut walker = arguments.iter();
+
+    while let Some(held) = walker.next() {
+        match held.as_str() {
+            "--plain" => plain = true,
+            "--seed" => {
+                let Some(value) = walker.next().and_then(|told| told.parse().ok()) else {
+                    eprintln!("voxam: --seed takes a number");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                };
+
+                seed = Some(value);
             }
-        },
-        _ => {
-            eprintln!(
-                "usage: voxam [--header] [--babel] [--accept script] [--seed N] \
-                 [--interpreter NAME] [--tandy] [--glkote] [--web [--port N]] \
-                 <story-file>"
-            );
-            ExitCode::from(EXIT_UNUSABLE)
+            told if !told.starts_with("--") && story.is_none() => {
+                story = Some(told.to_string());
+            }
+            _ => return usage(),
         }
     }
+
+    let Some(story) = story else {
+        return usage();
+    };
+
+    play(&story, seed, !plain)
+}
+
+/// Print the flag surface and refuse.
+fn usage() -> ExitCode {
+    eprintln!(
+        "usage: voxam [--header] [--babel] [--accept script] [--seed N] \
+         [--plain] [--interpreter NAME] [--tandy] [--glkote] \
+         [--web [--port N]] <story-file>"
+    );
+    ExitCode::from(EXIT_UNUSABLE)
 }
 
 /// The default port `--web` listens on.
@@ -566,7 +597,7 @@ fn aamachine_story(path: &Path) -> bool {
 /// ever dressed -- and the width takes the shell's COLUMNS word
 /// for it, the classic 80 otherwise: the painted terminal is the
 /// milestone that learns to measure for itself.
-fn aamachine_session(path: &str, seed: Option<u32>) -> ExitCode {
+fn aamachine_session(path: &str, seed: Option<u32>, screen: bool) -> ExitCode {
     use std::io::IsTerminal;
 
     let data = match std::fs::read(path) {
@@ -588,7 +619,7 @@ fn aamachine_session(path: &str, seed: Option<u32>) -> ExitCode {
         .ok()
         .and_then(|columns| columns.parse::<i64>().ok())
         .unwrap_or(80);
-    let dressed = std::io::stdout().is_terminal();
+    let dressed = screen && std::io::stdout().is_terminal();
     // The line source and the filename prompt each lock stdin
     // only for their own read, so neither starves the other.
     let source = Box::new(|| {
@@ -627,13 +658,14 @@ fn aamachine_session(path: &str, seed: Option<u32>) -> ExitCode {
     }
 }
 
-/// Play a Z-Machine story on the plain stream: text flows out,
-/// lines flow in, and end of input ends the session.
-fn play(path: &str, seed: Option<u32>) -> ExitCode {
+/// Play a story: the painted terminal by default at a real
+/// terminal, the plain stream behind `--plain` or a pipe -- text
+/// flows out, lines flow in, and end of input ends the session.
+fn play(path: &str, seed: Option<u32>, screen: bool) -> ExitCode {
     println!("\nVoxam Interpreter for Z-Machine and Glulx Stories\n");
 
     if aamachine_story(Path::new(path)) {
-        return aamachine_session(path, seed);
+        return aamachine_session(path, seed, screen);
     }
 
     match load_glulx(Path::new(path)) {
@@ -642,6 +674,18 @@ fn play(path: &str, seed: Option<u32>) -> ExitCode {
             return ExitCode::from(EXIT_UNUSABLE);
         }
         Ok(Some((story, blorb))) => {
+            // The painted terminal is the default face at a real
+            // terminal; `--plain` or a pipe keeps the stream.
+            if screen && glass::glassable() {
+                return match glass::glulx_session(&basename(path), story, blorb, seed) {
+                    Ok(()) => ExitCode::from(EXIT_OK),
+                    Err(error) => {
+                        println!("voxam: {error}");
+                        ExitCode::from(EXIT_UNUSABLE)
+                    }
+                };
+            }
+
             let stdin = std::io::stdin();
             let mut lines = stdin.lock().lines();
 
@@ -679,6 +723,19 @@ fn play(path: &str, seed: Option<u32>) -> ExitCode {
     }
 
     present_resources(&blorb, &loaded);
+
+    // The painted terminal is the default face at a real terminal
+    // -- the reference's own choice -- and `--plain` or a pipe
+    // keeps the stream, which is always there.
+    if screen && glass::glassable() {
+        return match glass::session(loaded, blorb.as_ref(), seed, Path::new(path)) {
+            Ok(()) => ExitCode::from(EXIT_OK),
+            Err(error) => {
+                println!("voxam: {error}");
+                ExitCode::from(EXIT_UNUSABLE)
+            }
+        };
+    }
 
     let session = Ok(loaded)
         .and_then(|story: Story| {

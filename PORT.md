@@ -45,10 +45,15 @@ PATH kept only as a last road. Packaging adds the sidecar bundling
 (tauri.conf.json externalBin) when installers are cut; milestone 7
 swaps the subprocess for in-process linking, the UI untouched.
 
+The `crates/voxam-glass/` crate arrived with milestone 6: the
+painted terminal on ratatui -- the Z painter, the Glk display,
+and the keystroke intakes -- kept out of `voxam-core` so the core
+stays free of terminal opinions, and testable to the last cell
+through ratatui's TestBackend. The CLI wires it in as the default
+face at a real terminal, `--plain` keeping the stream.
+
 Planned additions, in the order they're earned:
 
-- `crates/voxam-glass/` — the painted terminal (ratatui), if it
-  outgrows the CLI crate.
 - the Tauri 2 mobile targets of `desktop/`.
 - a `wasm` target of `voxam-core` married to glkote.js — the
   browser face with no server.
@@ -75,7 +80,8 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `acceptance.py`, `regtest.py`, `probe.py` | `voxam-core::harness` (or a dev-only crate) | The certification machinery. Ports early — it is how everything else is judged. |
 | `listing.py`, `glance.py`, `decompose.py`, `scribe.py` | `voxam` (CLI) | Inspection tools; `--listing` doubles as a decoder test. |
 | `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
-| `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** blessed's cell painting maps to ratatui's buffer model, not line-for-line. |
+| `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** Done for the terminal half with milestone 6: `screen.py` and `frontend.py` ported to `voxam-core`, `editor.py` beside them, and `painter.py` rewritten as `voxam-glass::painter` -- the model rendered whole into ratatui's buffer, whose diff replaces blessed's damaged-row repaints. The pygame `glass.py` window is not carried: its duties (Version 6 pictures, the arc band, the stage) are the desktop shell's, already served over the wire. |
+| `glulx/glk/painted.py`, `glulx/glk/terminal.py`, `glulx/glk/wrap.py` | `voxam-glass::glk`, `voxam-core::glulx::glk::wrap` | The painted Glk spine and its terminal folded into one struct over ratatui's Backend seam; the wrapper ported whole. The pygame `glk/glass.py` stays with the shell, as above. |
 | `gallery.py` | `voxam-core::gallery` | Ported with the deferred Blorb chunks (RelN, Reso, APal, BPal): sizes eager, pixels lazy, the adaptive-palette dance and the baked replacements whole; `Fraction` becomes the module's own exact `Ratio`. |
 | `stage.py` | `voxam-core::stage` | The §8.8 model whole -- eight windows, one grid, unit paints, the [MORE] budget -- certified by the stage drill sweep. Python's `//` becomes `div_euclid`, so any negative unit floors identically. |
 | `speaker.py` | deferred | The pygame window's voice. The webview face already plays V6 sound; decide later whether a native window still earns its keep. |
@@ -127,7 +133,24 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    byte-identical.
 6. **The painted terminal.** ratatui glass for all three machines.
    *Gate:* filmstrip comparisons where determinism allows; eyes
-   otherwise.
+   otherwise. *Standing, gate half-met (2026-08-30):* the glass is
+   built and wired -- the Z painter over the §8 screen model, the
+   Glk display over the window tree, the line editor and both
+   keystroke intakes, the painted face the CLI's default at a real
+   terminal with `--plain` keeping the stream (the Å-machine's
+   terminal voice, certified in milestone 4, is the third
+   machine's). The deterministic half of the gate is met: the
+   mirrored batteries hold every painting scenario to golden
+   TestBackend grids, a corpus Zork I session serves end to end
+   onto the test glass through the real loop, and every stanza and
+   replay sweep still runs byte-identical around the new flag
+   surface. The other half is eyes at a live terminal -- Beyond
+   Zork's font-3 map, Border Zone's ticking reads, a paged
+   Bureaucracy wall, glulxercise at the Glk glass -- and the ✅
+   waits for it. Deferred within the milestone, each honestly
+   claimed away: the speaker (no sound at the glass yet), the
+   sixel `--pixels` cover road (half-block covers paint
+   everywhere), terminal mouse reporting, and the recording seams.
 7. **The deluxe shell.** Interpreter linked in-process, automapper
    and notes as panes, keyed by IFID. Then Tauri mobile, then wasm.
 
@@ -278,9 +301,54 @@ sweeps prove the outputs identical across all of them.
   battery's `is_same_as`. Its `Fraction` becomes `gallery::Ratio`,
   an exact reduced i64 pair, so the Elbow Room arithmetic can never
   drift into floating point.
-- **One dependency so far**: `getrandom`, standing in for
+- **The painter renders whole and lets the buffer diff.** The
+  reference repaints the rows the screen model reports damaged;
+  the ratatui rewrite renders the entire grid every repaint and
+  the library's double-buffer diff finds the changed cells -- the
+  same minimal writes, the buffer's way around. The model's
+  damage ledger is drained but no longer steers, and the golden
+  assertions moved with the design: the mirrored batteries read
+  painted TestBackend grids instead of escape streams. Two seams
+  widened for the borrow: the model's [MORE] callback takes the
+  model back (lifted out for the call and restored), and the
+  editor's repaint takes its canvas back, since the canvas is
+  lent to the read loop for the whole line.
+- **The glass serving loop is the blocking path inside out.** The
+  reference's painted frontends block inside the machine's read
+  instructions; here the machine always suspends (the standing
+  suspension departure), so read_line, read_key, the §15 timed
+  ticking, the redisplay courtesy, and the abandon-on-terminate
+  drill all live in the CLI's serving loop between `run` calls,
+  delivered through `deliver_line`/`deliver_key`/`deliver_tick`.
+  The face counts its prints so the loop can honour §15's
+  redisplay remark the way the reference's machine counts its
+  own. Saves never park: the glass face does not suspend, so the
+  slot beside the story serves them, exactly the reference's
+  painted arrangement.
+- **The Glk display folds its spine and its terminal into one.**
+  The reference splits the painted Glk display into a
+  display-independent spine and a thin blessed terminal; the
+  rewrite is one struct over ratatui's Backend seam, painting
+  onto a persistent cell canvas -- "painting over is all the
+  erasing there is" -- that rides the buffer diff each frame. The
+  reference's posted-event back-reference is the standing
+  `Asked::Instead` departure; its identity-keyed buffer texts
+  become id-keyed wrappers pruned to the live tree each flush;
+  its monkeypatchable clock becomes the display's own injectable
+  one; and `prompt_file` widened to take the window map -- the
+  tree-walk reshaping -- so the interrupted layout repaints once
+  the prompt is answered.
+- **Control-C dies the reference's death by hand.** blessed's
+  cbreak leaves SIGINT alive, so the reference session ends on
+  the keypress; crossterm's raw mode eats it, so the intakes
+  translate the chord themselves -- restore the shell, exit 130,
+  the interrupted ending every shell recognises.
+- **The dependency ledger**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
-  purity rule, as anticipated below.
+  purity rule, as anticipated below — and, with milestone 6,
+  `ratatui` (with its crossterm) in `voxam-glass` alone: the
+  painted terminal is the one place the plan always named a
+  library for, and `voxam-core` still carries none of it.
 
 ## Standing decisions
 

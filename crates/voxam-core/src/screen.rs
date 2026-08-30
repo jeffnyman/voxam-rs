@@ -46,6 +46,11 @@ pub const STATUS_LAST_VERSION: u8 = 3;
 pub const WINDOWS_FIRST_VERSION: u8 = 3;
 pub const BOTTOM_HOME_LAST_VERSION: u8 = 4;
 
+/// The [MORE] callback's shape: the model itself is handed back
+/// so a painter can repaint the piled-up damage and read the
+/// cursor mid-write.
+pub type MorePause = Box<dyn FnMut(&mut ScreenModel)>;
+
 // Erase window's two whole-screen requests (§15 erase_window).
 pub const ERASE_UNSPLIT: i32 = -1;
 pub const ERASE_KEEP_SPLIT: i32 = -2;
@@ -101,8 +106,12 @@ pub struct ScreenModel {
     /// away hangs a callback here, and the model counts the lower
     /// window's fed lines toward it. Left as None -- the plain
     /// stream, the tests -- nothing counts and nothing pauses, so
-    /// recordings replay byte-identically.
-    pub more: Option<Box<dyn FnMut()>>,
+    /// recordings replay byte-identically. The callback takes the
+    /// model back so a painter can repaint the piled-up damage
+    /// and read the cursor mid-write -- the reference's bound
+    /// method, the borrow's way around: the callback is lifted
+    /// out for the call and restored after.
+    pub more: Option<MorePause>,
     fed: usize,
     upper_cursor: (usize, usize),
     lower_cursor: (usize, usize),
@@ -380,8 +389,9 @@ impl ScreenModel {
         if self.fed >= (self.lines.saturating_sub(self.split + 1)).max(1) {
             self.fed = 0;
 
-            if let Some(more) = &mut self.more {
-                more();
+            if let Some(mut more) = self.more.take() {
+                more(self);
+                self.more = Some(more);
             }
         }
     }

@@ -1,0 +1,12 @@
+[package]
+name = "voxam-glass"
+description = "The painted terminal: voxam's ratatui glass"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+ratatui = "0.30.2"
+voxam-core = { workspace = true }

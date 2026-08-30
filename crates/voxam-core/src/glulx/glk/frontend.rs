@@ -272,8 +272,12 @@ pub trait Frontend {
 
     /// Ask the player for a filename; None cancels. Cancelling is
     /// always a legitimate answer (Glk: File References), so a
-    /// display with no way to ask can simply inherit this.
-    fn prompt_file(&mut self, usage: u32, fmode: u32) -> Option<String> {
+    /// display with no way to ask can simply inherit this. The
+    /// window map rides along -- the tree-walk reshaping -- so a
+    /// painted display can repaint the interrupted layout once
+    /// the prompt is answered.
+    fn prompt_file(&mut self, windows: &mut WindowMap, usage: u32, fmode: u32) -> Option<String> {
+        let _ = windows;
         let _ = (usage, fmode);
 
         None

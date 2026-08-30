@@ -27,3 +27,4 @@ pub mod glkote;
 pub mod objects;
 pub mod resources;
 pub mod stdio;
+pub mod wrap;

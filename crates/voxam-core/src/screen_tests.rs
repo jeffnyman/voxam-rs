@@ -216,7 +216,7 @@ fn more_fires_at_a_screenful() {
     let held = Held(seen);
     let mut screen = small(5);
 
-    screen.more = Some(Box::new(move || held.0.set(held.0.get() + 1)));
+    screen.more = Some(Box::new(move |_model| held.0.set(held.0.get() + 1)));
 
     screen.write("\n\n\n\n");
 
@@ -242,7 +242,7 @@ fn rest_and_erase_refill_the_more_budget() {
     let seen = pauses.clone();
     let mut screen = small(5);
 
-    screen.more = Some(Box::new(move || seen.set(seen.get() + 1)));
+    screen.more = Some(Box::new(move |_model| seen.set(seen.get() + 1)));
 
     screen.write("\n\n\n\n");
     screen.rest();
@@ -267,7 +267,7 @@ fn upper_window_feeds_no_more_budget() {
     let seen = pauses.clone();
     let mut screen = small(5);
 
-    screen.more = Some(Box::new(move || seen.set(seen.get() + 1)));
+    screen.more = Some(Box::new(move |_model| seen.set(seen.get() + 1)));
 
     screen.split_window(2).unwrap();
     screen.set_window(UPPER).unwrap();

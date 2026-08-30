@@ -1059,7 +1059,7 @@ impl Glk {
             return None;
         }
 
-        let name = self.frontend.prompt_file(usage, fmode)?;
+        let name = self.frontend.prompt_file(&mut self.windows, usage, fmode)?;
 
         if name.is_empty() {
             return None;
@@ -3687,7 +3687,12 @@ mod tests {
             Asked::Instead(Vec::new())
         }
 
-        fn prompt_file(&mut self, _usage: u32, _fmode: u32) -> Option<String> {
+        fn prompt_file(
+            &mut self,
+            _windows: &mut WindowMap,
+            _usage: u32,
+            _fmode: u32,
+        ) -> Option<String> {
             self.name.clone()
         }
     }

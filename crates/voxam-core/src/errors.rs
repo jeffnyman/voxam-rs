@@ -24,6 +24,10 @@ pub enum VoxamError {
     /// own refusals so a serving loop can answer the reference's
     /// "not JSON" error stanza in kind.
     GlkOteJson(String),
+    /// The painted terminal's own mishaps -- a glass that cannot
+    /// be drawn on -- surfaced by the serving loop, since a
+    /// Frontend call cannot return what its trait did not promise.
+    Glass(String),
     Iff(String),
     Png(String),
     ZMachineArithmetic(String),
@@ -58,6 +62,7 @@ impl fmt::Display for VoxamError {
         | Self::GlulxString(message)
         | Self::GlkOte(message)
         | Self::GlkOteJson(message)
+        | Self::Glass(message)
         | Self::Iff(message)
         | Self::Png(message)
         | Self::ZMachineArithmetic(message)

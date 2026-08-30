@@ -219,7 +219,7 @@ impl Frontend for StdioFrontend {
 
     /// Ask for a filename in the stream; empty cancels, and so
     /// does the end of input.
-    fn prompt_file(&mut self, _usage: u32, fmode: u32) -> Option<String> {
+    fn prompt_file(&mut self, _windows: &mut WindowMap, _usage: u32, fmode: u32) -> Option<String> {
         let verb = if fmode == file_mode::READ {
             "Load from"
         } else {
@@ -357,11 +357,17 @@ mod tests {
         let (mut frontend, written) = scripted(&["saga", "  "]);
 
         assert_eq!(
-            frontend.prompt_file(0, file_mode::WRITE),
+            frontend.prompt_file(&mut WindowMap::new(), 0, file_mode::WRITE),
             Some("saga".into())
         );
-        assert_eq!(frontend.prompt_file(0, file_mode::READ), None);
-        assert_eq!(frontend.prompt_file(0, file_mode::READ), None);
+        assert_eq!(
+            frontend.prompt_file(&mut WindowMap::new(), 0, file_mode::READ),
+            None
+        );
+        assert_eq!(
+            frontend.prompt_file(&mut WindowMap::new(), 0, file_mode::READ),
+            None
+        );
 
         let held = written.borrow().clone();
 

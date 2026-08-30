@@ -37,10 +37,13 @@ games are interchange-true: Quetzal for the Z-Machine (readable by
 dfrotz and friends), IFZS for Glulx, and the Å-machine's AASV
 files.
 
-Z-Machine and Glulx stories play on the plain stream -- text out,
-lines in, end of input ends the session. Å-machine stories play at
-the terminal, dressed in the story's own styles when the output is
-a real terminal and plain when piped.
+At a real terminal, stories play on the painted glass: the
+Z-Machine's §8 windows cell for cell (Blorb cover art included,
+shown Infocom's way -- the picture, a keypress, the story), the
+Glk window tree for Glulx, and the Å-machine dressed in the
+story's own styles. Piped -- or asked with `--plain` -- everything
+keeps the plain stream: text out, lines in, end of input ends the
+session.
 
 A few flags:
 
@@ -50,6 +53,9 @@ cargo run --release -- --header stories/zork1.z3
 
 # Play with a fixed random seed, for reproducible sessions.
 cargo run --release -- --seed 92 stories/zork1.z3
+
+# Keep the plain stream even at a real terminal.
+cargo run --release -- --plain stories/zork1.z3
 
 # Replay a recorded acceptance script (Z-Machine and Glulx).
 cargo run --release -- --accept acceptance/zork1-r88-s840726.accept
@@ -90,8 +96,8 @@ The shell finds the interpreter beside its own executable first
 interpreter as a sidecar, so a player installs one thing and
 plays.
 
-Still to come -- the painted terminal -- `PORT.md` holds the
-order it arrives in.
+Still to come -- the deluxe shell, with the interpreter linked
+in-process -- `PORT.md` holds the order it arrives in.
 
 ## Building
 

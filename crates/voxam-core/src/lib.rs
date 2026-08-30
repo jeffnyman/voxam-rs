@@ -12,6 +12,7 @@ pub mod aiff;
 pub mod babel;
 pub mod base64;
 pub mod blorb;
+pub mod editor;
 pub mod errors;
 pub mod flate;
 pub mod format;
