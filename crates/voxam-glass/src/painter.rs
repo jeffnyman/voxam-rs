@@ -35,7 +35,7 @@ use voxam_core::editor::{EXPIRED, LineEditor, read_line_edited};
 use voxam_core::errors::VoxamError;
 use voxam_core::frontend::{Frontend, GRAPHICS_FONT, Status};
 use voxam_core::png::Picture;
-use voxam_core::screen::{BOLD, Cell, ITALIC, REVERSE, ScreenModel};
+use voxam_core::screen::{BOLD, Cell, ITALIC, LOWER, REVERSE, ScreenModel};
 
 use crate::keys::KeySource;
 
@@ -839,7 +839,16 @@ impl<B: Backend + 'static> Frontend for PaintedHalf<B> {
     fn write(&mut self, text: &str) {
         let mut face = self.0.borrow_mut();
 
-        face.prints += 1;
+        // Counted so a timed read can tell whether its interrupt
+        // disturbed the input line (§15 read remarks) -- which
+        // only a story-window print does. Border Zone's clock
+        // tick repaints the status window every interval, and
+        // redisplaying the untouched prompt for those would grow
+        // a picket fence of > characters.
+        if face.model.selected() == LOWER {
+            face.prints += 1;
+        }
+
         face.model.write(text);
         face.repaint();
     }
@@ -848,7 +857,10 @@ impl<B: Backend + 'static> Frontend for PaintedHalf<B> {
     fn write_rectangle(&mut self, rows: &[String]) {
         let mut face = self.0.borrow_mut();
 
-        face.prints += 1;
+        if face.model.selected() == LOWER {
+            face.prints += 1;
+        }
+
         face.model.write_rectangle(rows);
         face.repaint();
     }

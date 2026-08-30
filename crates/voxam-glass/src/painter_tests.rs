@@ -813,6 +813,31 @@ fn a_sizeless_terminal_falls_back() {
     assert_eq!(glass.lines, FALLBACK_LINES);
 }
 
+// Only story-window prints count toward the §15 redisplay:
+// Border Zone's clock tick repaints the status window every
+// interval, and redisplaying the untouched prompt for those
+// would grow a picket fence of > characters.
+#[test]
+fn only_story_prints_count_toward_redisplay() {
+    let (face, mut half, _script, _bells) = painted(5, ScriptedKeys::default());
+
+    half.write(">");
+
+    assert_eq!(face.borrow().prints, 1);
+
+    half.split_window(1);
+    half.set_window(UPPER);
+    half.set_cursor(1, 1);
+    half.write("17:26");
+
+    assert_eq!(face.borrow().prints, 1);
+
+    half.set_window(0);
+    half.write("The train lurches.");
+
+    assert_eq!(face.borrow().prints, 2);
+}
+
 // The painted answer for get_cursor is the model's own
 // (§8.7.2.3.2).
 #[test]
