@@ -58,21 +58,10 @@ fn story_error(message: String) -> VoxamError {
     VoxamError::AAMachine(message)
 }
 
-/// The reference's `zlib.crc32`, chained: the standard CRC-32 over
-/// the polynomial IFF's world shares with zlib and PNG.
-pub fn crc32(data: &[u8], running: u32) -> u32 {
-    let mut crc = !running;
-
-    for &byte in data {
-        crc ^= u32::from(byte);
-
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-
-    !crc
-}
+// The checksum grew a second customer in the PNG work, so its home
+// is the flate module now; the re-export keeps this the story's own
+// address for it, as the reference's `zlib.crc32` import reads.
+pub use crate::flate::crc32;
 
 /// One parsed Å-machine story, its header's claims verified.
 #[derive(Debug, Clone)]

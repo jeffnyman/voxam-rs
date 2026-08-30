@@ -13,12 +13,19 @@ pub mod babel;
 pub mod base64;
 pub mod blorb;
 pub mod errors;
+pub mod flate;
 pub mod format;
 pub mod frontend;
+pub mod gallery;
+#[cfg(test)]
+mod gallery_tests;
 pub mod glkote;
 pub mod glulx;
 pub mod iff;
 pub mod infocom;
+pub mod png;
+#[cfg(test)]
+mod png_tests;
 pub mod saves;
 pub mod screen;
 pub mod wav;

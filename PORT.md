@@ -71,12 +71,13 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `aamachine/` (5.5k lines) | `voxam-core::aamachine` | Mechanical; certified byte-identical against the reference batteries. |
 | `iff.py`, `blorb.py`, `babel.py`, `infocom.py` | `voxam-core::{iff, blorb, babel, …}` | Byte work; IFIDs remain the persistence key for deluxe features. |
 | `zmachine/quetzal.py`, `aamachine/saves.py` | with their machines | Interchange formats; saves must round-trip with other interpreters. |
-| `png.py`, `aiff.py`, `wav.py`, `sixel.py`, `font3.py` | `voxam-core` or drop | Decided for `aiff`/`wav`: straight ports, zero-dep purity kept (the wire's data: urls need them, plus a hand-rolled base64). `png` and the rest: decide per file when their era arrives. |
+| `png.py`, `aiff.py`, `wav.py`, `sixel.py`, `font3.py` | `voxam-core` or drop | Decided for `aiff`/`wav`/`png`: straight ports, zero-dep purity kept (the wire's data: urls need them, plus a hand-rolled base64 — and, for `png`, the hand-rolled `flate` module below). `sixel`/`font3`: decide when their era arrives. |
 | `acceptance.py`, `regtest.py`, `probe.py` | `voxam-core::harness` (or a dev-only crate) | The certification machinery. Ports early — it is how everything else is judged. |
 | `listing.py`, `glance.py`, `decompose.py`, `scribe.py` | `voxam` (CLI) | Inspection tools; `--listing` doubles as a decoder test. |
 | `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
 | `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** blessed's cell painting maps to ratatui's buffer model, not line-for-line. |
-| `stage.py`, `gallery.py`, `speaker.py` | deferred | The pygame window. The webview face already renders V6 art, sound, and mouse; decide later whether a native window still earns its keep. |
+| `gallery.py` | `voxam-core::gallery` | Ported with the deferred Blorb chunks (RelN, Reso, APal, BPal): sizes eager, pixels lazy, the adaptive-palette dance and the baked replacements whole; `Fraction` becomes the module's own exact `Ratio`. |
+| `stage.py`, `speaker.py` | deferred | The pygame window. The webview face already renders V6 art, sound, and mouse; decide later whether a native window still earns its keep. `stage.py`'s StageModel is next: the wire's Version 6 rung. |
 | `web.py`, `glkote.py`, `*/glkote.py` | `voxam` (CLI) | `--web` on a stdlib-adjacent server (`tiny_http` or hand-rolled), `--glkote` over stdio. The wire types live in `voxam-core`, on a hand-rolled JSON that keeps Python's exact spelling -- insertion-ordered keys, compact separators, ensure_ascii -- because the stanza sweeps diff byte for byte, which serde_json's dialect would part. |
 | `filmstrip.py` | with the faces | Screenshot regression; wants the faces standing first. |
 | `tests/` (42k lines) | selectively | Port unit tests for the decoders (ZSCII, operands, Quetzal, IFF); the recordings certify the rest end-to-end. |
@@ -217,6 +218,31 @@ sweeps prove the outputs identical across all of them.
   can start. The Å-machine's face needed none of it: its machine
   owns the voice as a public field (`Machine<WireVoice>`), so the
   face holds no voice at all and takes it as an argument.
+- **zlib is spelled by hand, on both sides of the mirror.** The
+  reference leans on Python's stdlib `zlib` for PNG work; Rust's
+  stdlib has none, so `flate.rs` hand-rolls the checksums, a full
+  RFC 1951 inflate, and the deflate. The deflate is the deeper
+  story: `zlib.compress`'s bytes are the backing library's own
+  business — CPython 3.14 on Windows ships zlib-ng, which
+  compresses differently from madler zlib — so the same reference
+  emits different wire bytes on different machines, and certified
+  bytes cannot. The fix went into the *reference first* (the
+  standing not-frozen decision below): `png.py`'s `encoded()` now
+  spells its own deterministic stream — one fixed-Huffman block,
+  greedy matches through a last-seen table — and `flate.rs` ports
+  it move for move, golden vectors pinning the bytes in both
+  batteries. Three smaller spellings ride along: inflate refusal
+  prose is the port's own words (the reference hears whatever its
+  zlib build says), a PLTE chunk whose length is not a multiple of
+  three drops the remainder where the reference's `iter_unpack`
+  would crash, and `aamachine::story::crc32` moved to `flate` with
+  a re-export keeping its old address.
+- **The gallery caches behind `Rc`.** The reference's decode cache
+  hands back the same object so re-plots are free; here `picture()`
+  answers `Rc<Picture>` clones, `Rc::ptr_eq` standing in for the
+  battery's `is_same_as`. Its `Fraction` becomes `gallery::Ratio`,
+  an exact reduced i64 pair, so the Elbow Room arithmetic can never
+  drift into floating point.
 - **One dependency so far**: `getrandom`, standing in for
   `os.urandom` — the per-file relaxation of the hand-rolled
   purity rule, as anticipated below.

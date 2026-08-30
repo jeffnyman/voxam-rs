@@ -25,6 +25,7 @@ pub enum VoxamError {
     /// "not JSON" error stanza in kind.
     GlkOteJson(String),
     Iff(String),
+    Png(String),
     ZMachineArithmetic(String),
     ZMachineQuetzal(String),
     ZMachineStory(String),
@@ -58,6 +59,7 @@ impl fmt::Display for VoxamError {
         | Self::GlkOte(message)
         | Self::GlkOteJson(message)
         | Self::Iff(message)
+        | Self::Png(message)
         | Self::ZMachineArithmetic(message)
         | Self::ZMachineQuetzal(message)
         | Self::ZMachineStory(message)
