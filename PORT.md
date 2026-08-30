@@ -147,10 +147,31 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    surface. The other half is eyes at a live terminal -- Beyond
    Zork's font-3 map, Border Zone's ticking reads, a paged
    Bureaucracy wall, glulxercise at the Glk glass -- and the ✅
-   waits for it. Deferred within the milestone, each honestly
-   claimed away: the speaker (no sound at the glass yet), the
-   sixel `--pixels` cover road (half-block covers paint
-   everywhere), terminal mouse reporting, and the recording seams.
+   waits for it. The first eyes pass caught what the batteries
+   could not and each finding closed the same day: the Glk glass
+   was missing its backend clear -- painting blanks onto ratatui's
+   already-blank model emits nothing, so the shell showed through
+   every unpainted cell, which is why a Glulx story looked like
+   text scattered over old prompts -- and a cover note printed to
+   stdout was wiped the instant the glass cleared, so it now
+   writes through the screen model and stands on the story's first
+   screen. Both are pinned by a ConPTY harness that replays real
+   sessions onto a virtual screen, dirty-screen scenario included
+   -- the milestone's filmstrip, arrived at last. The eyes pass
+   also asked after Beyond Zork's colours: the reference painter
+   is exactly as monochrome through the same screens -- the DOS
+   blue was the interpreter's own default palette, not the game's
+   ink -- so the port is faithful and a palette dressing is a
+   both-sides feature for later. The sixel cover road shipped with
+   the pass: `--pixels` draws a Blorb cover in real pixels on a
+   terminal that speaks sixel (Windows Terminal 1.22+). Deferred
+   within the milestone, each honestly claimed away: the speaker
+   (no sound at the glass yet), terminal mouse reporting, the
+   recording seams, and sixel *detection* -- the reference asks
+   the terminal first and falls back on silence, but crossterm's
+   parser consumes the device-attributes answer with no seam to
+   read it, so until one exists the flag is an explicit opt-in,
+   believed as asked and never the default.
 7. **The deluxe shell.** Interpreter linked in-process, automapper
    and notes as panes, keyed by IFID. Then Tauri mobile, then wasm.
 

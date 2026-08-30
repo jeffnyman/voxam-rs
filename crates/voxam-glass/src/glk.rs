@@ -450,7 +450,19 @@ impl<B: Backend> GlkGlass<B> {
 
     /// Paint every row blank, wiping what the shell left: the
     /// story begins on a clean screen.
+    ///
+    /// The backend clear comes first, and it is not a nicety: it
+    /// wipes the real screen and resets the buffer diff's
+    /// baseline. Without it, painting blanks onto ratatui's
+    /// already-blank model emits nothing, and whatever the shell
+    /// left standing shows through every cell the game never
+    /// paints -- story text scattered across old prompts, which
+    /// is exactly how it looked.
     pub fn clear(&mut self) {
+        let cleared = self.terminal.clear();
+
+        self.noted(cleared);
+
         let (width, height) = self.sizes();
         let blank = " ".repeat(width.max(0) as usize);
 

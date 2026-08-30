@@ -70,32 +70,39 @@ impl Drop for Raw {
     }
 }
 
-/// The Blorb's cover picture, when there is one Voxam can draw.
+/// The Blorb's cover picture, or the note explaining its absence.
 ///
 /// Cover art is a courtesy, never a gate: a cover Voxam cannot
 /// draw -- Zork 1's JPEG, an exotic PNG -- earns a note and the
-/// story plays on. The notes print before the glass takes the
-/// screen.
-fn covered(blorb: Option<&Blorb>) -> Option<Picture> {
-    let cover = blorb?.cover()?;
+/// story plays on. The note travels back rather than printing:
+/// anything on stdout is wiped the instant the glass clears, so
+/// the session writes it through the screen model instead, where
+/// it stands on the story's first screen and scrolls away like
+/// any other line.
+fn covered(blorb: Option<&Blorb>) -> (Option<Picture>, Option<String>) {
+    let Some(cover) = blorb.and_then(Blorb::cover) else {
+        return (None, None);
+    };
 
     if cover.chunk.chunk_id != PNG_ID {
         let kind = String::from_utf8_lossy(&cover.chunk.chunk_id)
             .trim()
             .to_string();
 
-        println!("voxam: the cover picture is {kind}, which Voxam cannot draw\n");
-
-        return None;
+        return (
+            None,
+            Some(format!(
+                "voxam: the cover picture is {kind}, which Voxam cannot draw"
+            )),
+        );
     }
 
     match decode(&cover.chunk.payload, None) {
-        Ok(picture) => Some(picture),
-        Err(error) => {
-            println!("voxam: the cover picture cannot be drawn: {error}\n");
-
-            None
-        }
+        Ok(picture) => (Some(picture), None),
+        Err(error) => (
+            None,
+            Some(format!("voxam: the cover picture cannot be drawn: {error}")),
+        ),
     }
 }
 
@@ -111,9 +118,10 @@ pub fn session(
     blorb: Option<&Blorb>,
     seed: Option<u32>,
     path: &Path,
+    pixels: bool,
 ) -> Result<(), VoxamError> {
     let version = story.header().version();
-    let cover = covered(blorb);
+    let (cover, note) = covered(blorb);
     let raw = Raw::held()?;
     let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))
         .map_err(|error| glass_error(format!("the glass cannot stand: {error}")))?;
@@ -140,7 +148,18 @@ pub fn session(
     )?;
 
     if let Some(picture) = cover {
-        face.borrow_mut().show_frontispiece(&picture);
+        if pixels {
+            sixel_shown(&face, &picture);
+        } else {
+            face.borrow_mut().show_frontispiece(&picture);
+        }
+    }
+
+    if let Some(note) = note {
+        // A cover that could not be drawn is explained on the
+        // story's own first screen, where the clear cannot wipe
+        // the note before it is read.
+        face.borrow_mut().model.write(&format!("{note}\n\n"));
     }
 
     // The story deserves a clean glass: anything the shell left on
@@ -156,6 +175,53 @@ pub fn session(
     println!();
 
     outcome
+}
+
+/// Show a cover in real sixel pixels, magnified to the floors.
+///
+/// The `--pixels` flag is the player's own claim that the
+/// terminal speaks sixel -- Windows Terminal from 1.22, xterm,
+/// foot, and friends. The reference interrogates the terminal
+/// first and falls back on silence; crossterm's parser consumes
+/// the device-attributes answer internally with no seam to read
+/// it, so until one exists the flag is believed as asked -- an
+/// explicit opt-in, never the default. The escape bytes go
+/// around ratatui, and the closing clear resets the buffer diff's
+/// baseline so no splash pixel survives into the story.
+fn sixel_shown(face: &Face<CrosstermBackend<Stdout>>, picture: &Picture) {
+    use voxam_glass::sixel::{CELL_HEIGHT_FLOOR, CELL_WIDTH_FLOOR, encode, pixel_scale};
+
+    let (columns, lines) = {
+        let held = face.borrow();
+        let glass = held.glass.borrow();
+
+        (glass.columns, glass.lines)
+    };
+
+    face.borrow_mut().clear();
+
+    let scale = pixel_scale(
+        picture,
+        columns * CELL_WIDTH_FLOOR,
+        lines * CELL_HEIGHT_FLOOR,
+    );
+    let width_cells = picture.width as usize * scale / CELL_WIDTH_FLOOR;
+    let left = columns.saturating_sub(width_cells) / 2;
+
+    {
+        let held = face.borrow();
+        let mut glass = held.glass.borrow_mut();
+        let _ = glass
+            .terminal_mut()
+            .set_cursor_position(Position::new(left as u16, 0));
+    }
+
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(encode(picture, scale).as_bytes());
+    let _ = stdout.flush();
+
+    face.borrow_mut().read_key(None);
+    face.borrow_mut().clear();
 }
 
 /// Run the machine to its end, serving every read at the glass.

@@ -57,6 +57,11 @@ cargo run --release -- --seed 92 stories/zork1.z3
 # Keep the plain stream even at a real terminal.
 cargo run --release -- --plain stories/zork1.z3
 
+# Draw a Blorb's cover art in real sixel pixels rather than
+# half-block cells -- for terminals that speak sixel, like
+# Windows Terminal 1.22 and later.
+cargo run --release -- --pixels stories/zork1.zblorb
+
 # Replay a recorded acceptance script (Z-Machine and Glulx).
 cargo run --release -- --accept acceptance/zork1-r88-s840726.accept
 

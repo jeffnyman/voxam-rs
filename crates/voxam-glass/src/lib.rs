@@ -12,6 +12,7 @@
 pub mod glk;
 pub mod keys;
 pub mod painter;
+pub mod sixel;
 
 // The one terminal library, spoken with one voice: the CLI takes
 // ratatui (and its crossterm re-export) from here, so the backend
