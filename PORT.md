@@ -112,9 +112,18 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    land whole under the plain voice, Miss Gosling's Last Case
    included, and the terminal sessions diff clean against the
    reference implementation stream for stream.
-5. **The wire.** `--glkote` stanzas over stdio, `--web`, the
-   `voxam:` sidecar block. *Gate:* the existing Tauri shell plays
-   stories against the Rust binary, unmodified.
+5. **The wire.** ✅ *(2026-08-30)* `--glkote` stanzas over stdio
+   for all three machines, `--web`, the Babel identities, and the
+   §8.8 stage: Version 6 served as one scaled canvas, pictures
+   through the adaptive-palette dance, the under-cursor samples
+   minted. *Gate met:* the Tauri shell -- carried into this
+   repository, everything running from here -- plays stories
+   against the Rust binary, and every wire sweep runs
+   byte-identical: zglkote 42 of 42 (Arthur, Journey, Shogun, and
+   Zork Zero on the stage dialect included), gglkote 2 of 2,
+   aaglkote 4 of 4. The `voxam:` sidecar moved to its own rung:
+   designed in the reference first, then ported -- the deluxe
+   features consume it, so it rides ahead of milestone 7.
 6. **The painted terminal.** ratatui glass for all three machines.
    *Gate:* filmstrip comparisons where determinism allows; eyes
    otherwise.
@@ -238,6 +247,18 @@ sweeps prove the outputs identical across all of them.
   three drops the remainder where the reference's `iter_unpack`
   would crash, and `aamachine::story::crc32` moved to `flate` with
   a re-export keeping its old address.
+- **The stage face is the same struct wearing a stage half.**
+  The reference's StageFrontend subclasses its two-window face;
+  here `GlkOteFrontend` carries `stage: Option<StageHalf>` and
+  every seam that differs branches on it -- the subclass override,
+  the borrow's way around. The machine's stage seams ride the
+  ledger in units: the window ledger, the header's screen-units
+  and font words, split_window's tiling, and stream 3's width
+  arithmetic all consult one `unit_metrics` (8-by-8 on a measuring
+  Version 6 glass, 1-by-1 everywhere else) -- Arthur right-aligns
+  its ribbon from the $30 width word, which is how a cells-for-
+  units slip was found. The zglkote sweep proves all four stage
+  sessions identical.
 - **The gallery caches behind `Rc`.** The reference's decode cache
   hands back the same object so re-plots are free; here `picture()`
   answers `Rc<Picture>` clones, `Rc::ptr_eq` standing in for the

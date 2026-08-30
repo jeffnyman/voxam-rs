@@ -34,26 +34,41 @@
 //! cycle Rust refuses. Here the face is shared behind a cell --
 //! the machine holds one handle as its [`Frontend`], a [`Session`]
 //! holds the other beside the machine itself -- and the halves
-//! that need both (render, accept) live on the Session. The
-//! Version 6 stage face arrives with the stage rung.
+//! that need both (render, accept) live on the Session.
+//!
+//! The Version 6 stage joins as the same struct wearing a stage
+//! half: the StageFrontend the reference subclasses becomes
+//! `stage: Option<StageHalf>`, and every seam that differs
+//! branches on it. One scaled canvas carries the whole §8.8
+//! screen -- the StageModel's unit-positioned paints become the
+//! stage dialect's draw ops in the art's own coordinate space,
+//! pictures plot through the gallery's adaptive-palette dance,
+//! and §8.3.1's under-cursor sample reads the painted stage
+//! itself, minting codes past the named ones. A display that
+//! never learned the dialect is refused loudly at the door.
 
 use std::cell::{RefCell, RefMut};
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::rc::Rc;
 
 use crate::babel::ifiction;
+use crate::base64::b64;
 use crate::errors::VoxamError;
 use crate::frontend::{
     ARC_MODES, ARC_PIXEL_ROWS, ARC_REFERENCE_WIDTH, Frontend, Status, colour_value,
 };
+use crate::gallery::Gallery;
 use crate::glkote::json::{Object, Value};
 use crate::glkote::{
     Ink, LineSpec, Page, Run, TextRun, WindowSpec, carded, measured, partials, read_stanza,
     write_stanza,
 };
 use crate::glulx::glk::resources::{ImageInfo, Resources, pictured};
+use crate::png;
 use crate::screen::{BOLD, ITALIC};
 use crate::screen::{CURRENT_COLOUR, DEFAULT_COLOUR, FIXED_PITCH, REVERSE, ScreenModel, UPPER};
+use crate::stage::{Paint, StageModel, TextPaint};
 use crate::zmachine::header::STATUS_FLAGS_VERSION;
 use crate::zmachine::machine::{
     FULL_VOLUME, Identity, Machine, Purpose, SINGLE_CLICK, Waiting, Wants,
@@ -136,6 +151,63 @@ const BUFFER: i64 = 1;
 /// The screen model that plays on the §8.8 stage.
 pub const STAGE_VERSION: u8 = 6;
 
+/// The stage without a Reso chunk: MCGA's 320 by 200, the screen
+/// Infocom's Version 6 art was drawn for -- and the Blorb rule for
+/// art without a Reso is one image pixel per screen pixel, so the
+/// art's own space is the only default that draws it true (Blorb:
+/// The Resolution Chunk).
+const STANDARD_STAGE: (u32, u32) = (320, 200);
+
+/// One stage cell in units: the 8-by-8 character of the MCGA
+/// presentation (§8.8.1).
+const CELL: i64 = 8;
+
+/// §8.3.1's "the colour of the pixel under the cursor", passed
+/// through signed by the machine.
+const PIXEL_COLOUR: i32 = -1;
+
+/// Where the stage's minted colour codes begin: past every §8.3.1
+/// code the spec names, exactly as the pygame glass mints its
+/// sampled colours.
+const FIRST_SAMPLED: i32 = 16;
+
+/// The stage's own §8.3.1 code-1 defaults: white ink on black
+/// paper, the machine's home look, matching the pygame glass.
+const INK_DEFAULT: &str = "#ffffff";
+const PAPER_DEFAULT: &str = "#000000";
+
+/// The Version 6 stage's half of the face -- the reference's
+/// StageFrontend subclass, spelled as extra state the same struct
+/// wears: the StageModel, the gallery, the one scaled canvas, the
+/// repaint journal, the adaptive-palette seam, and the minted
+/// under-cursor colours.
+struct StageHalf {
+    stage: StageModel,
+    gallery: Option<Gallery>,
+    has_pictures: bool,
+    canvas_ident: Option<i64>,
+    // The cycle's draw ops, and the journal a repaint replays:
+    // everything since the last whole-stage fill, since nothing
+    // before one can ever show again.
+    ops: Vec<Object>,
+    journal: Vec<Object>,
+    repaint_owed: bool,
+    // The adaptive-palette seam: each picture's encoding
+    // remembered per palette era, the standing chrome's positions
+    // in insertion order (the reference's dict), and the last
+    // Current Palette serial seen -- a change re-dresses the
+    // chrome (Blorb: The Adaptive Palette Chunk).
+    urls: HashMap<u32, (i64, String)>,
+    chrome: Vec<(u32, (u16, u16))>,
+    palette_serial: u32,
+    // The minted colours: §8.3.1's under-cursor samples, each
+    // distinct CSS colour given a code past the named ones -- the
+    // wire's twin of the glass's sampled palette.
+    minted: HashMap<i32, String>,
+    codes: HashMap<String, i32>,
+    next_code: i32,
+}
+
 fn glkote_error(message: String) -> VoxamError {
     VoxamError::GlkOte(message)
 }
@@ -192,6 +264,10 @@ pub struct GlkOteFrontend {
     // the next render -- the serving loop's error stanza, one
     // cycle late at worst.
     fault: Option<VoxamError>,
+    // The Version 6 stage half, None on the two-window face; every
+    // seam that differs branches on it -- the reference's subclass
+    // override, the borrow's way around.
+    stage: Option<StageHalf>,
 }
 
 impl GlkOteFrontend {
@@ -227,7 +303,402 @@ impl GlkOteFrontend {
             has_colours: false,
             has_sounds: false,
             fault: None,
+            stage: None,
         }
+    }
+
+    /// The Version 6 stage at the far end of the protocol.
+    ///
+    /// One scaled canvas in the stage dialect's words: the same
+    /// StageModel the pygame glass paints from reduces the
+    /// eight-window screen to unit-positioned paints, and each
+    /// becomes a draw op -- placed text, fills, sliding rectangles
+    /// -- in the art's own logical space, the display magnifying
+    /// it to fit (§8.8). The stage is pinned to the Blorb's Reso
+    /// standard window, or MCGA's 320 by 200 without one, so
+    /// layouts land exactly where the artists put them and the
+    /// Reso arithmetic collapses to each picture's own standard
+    /// ratio.
+    ///
+    /// The doorway courtesies stay off the stage -- a Version 6
+    /// game paints its own opening -- and the [MORE] budget stays
+    /// unarmed: a suspending face cannot hold a scroll mid-print,
+    /// so long passages flow uninterrupted, the scrollback road
+    /// not yet taken. Fails only when the Blorb's art census
+    /// cannot be hung.
+    pub fn staged(version: u8, resources: Option<Resources>) -> Result<Self, VoxamError> {
+        let mut face = Self::new(version, resources);
+        let (mut width, mut height) = STANDARD_STAGE;
+
+        if let Some(resolution) = face
+            .resources
+            .as_ref()
+            .and_then(|held| held.blorb.as_ref())
+            .and_then(|blorb| blorb.resolution.as_ref())
+        {
+            width = resolution.width;
+            height = resolution.height;
+        }
+
+        face.screen_columns = (width / CELL as u32).clamp(1, 255) as u8;
+        face.screen_lines = (height / CELL as u32).clamp(1, 255) as u8;
+        // The stage paints its own ink into the ops, so the §8.3
+        // claim needs no display grant.
+        face.has_colours = true;
+
+        // The gallery rules the picture claims exactly as it does
+        // at the glass: placards measured, Reso understood, and a
+        // count of zero leaving the header's offer unclaimed.
+        let gallery = match face.resources.as_ref().and_then(|held| held.blorb.as_ref()) {
+            Some(blorb) => Some(blorb.gallery()?),
+            None => None,
+        };
+        let has_pictures = gallery.as_ref().is_some_and(|held| held.count() > 0);
+
+        face.stage = Some(StageHalf {
+            stage: StageModel::new(
+                usize::from(face.screen_columns),
+                usize::from(face.screen_lines),
+                CELL as usize,
+                CELL as usize,
+            ),
+            gallery,
+            has_pictures,
+            canvas_ident: None,
+            ops: Vec::new(),
+            journal: Vec::new(),
+            repaint_owed: false,
+            urls: HashMap::new(),
+            chrome: Vec::new(),
+            palette_serial: 0,
+            minted: HashMap::new(),
+            codes: HashMap::new(),
+            next_code: FIRST_SAMPLED,
+        });
+
+        // The opening curtain: the stage's own paper before any
+        // game paints, the setcolor keeping a rescaled canvas's
+        // clear the same colour.
+        let mut setcolor = Object::new();
+
+        setcolor.set("special", "setcolor");
+        setcolor.set("color", PAPER_DEFAULT);
+
+        let curtain = face.whole_fill(PAPER_DEFAULT);
+        let stage = face.stage.as_mut().expect("just staged");
+
+        stage.ops.push(setcolor);
+        stage.ops.push(curtain);
+
+        Ok(face)
+    }
+
+    /// The stage's size in its own units.
+    fn stage_logical(&self) -> (i64, i64) {
+        (
+            i64::from(self.screen_columns) * CELL,
+            i64::from(self.screen_lines) * CELL,
+        )
+    }
+
+    /// A fill covering the whole stage.
+    fn whole_fill(&self, color: &str) -> Object {
+        let (width, height) = self.stage_logical();
+        let mut op = Object::new();
+
+        op.set("special", "fill");
+        op.set("x", 0i64);
+        op.set("y", 0i64);
+        op.set("width", width);
+        op.set("height", height);
+        op.set("color", color);
+
+        op
+    }
+
+    /// Open the staged session; the stage needs the dialect
+    /// spoken. The screen's size never comes from the metrics
+    /// here: the stage is pinned to the art's own space and the
+    /// display scales it. Only the box is taken.
+    fn begin_staged(&mut self, stanza: &Object) -> Result<(), VoxamError> {
+        let support: Vec<String> = match stanza.get("support") {
+            Some(Value::List(held)) => held
+                .iter()
+                .filter_map(|word| word.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let supports = |word: &str| support.iter().any(|held| held == word);
+
+        if !supports("stage") {
+            return Err(glkote_error(
+                "the display never learned the stage; the Version 6 screen needs the \
+                 dialect's own word"
+                    .into(),
+            ));
+        }
+
+        self.has_timed_input = supports("timer");
+        self.speaks_sound = supports("sound");
+        self.has_sounds = self.speaks_sound
+            && self
+                .resources
+                .as_ref()
+                .is_some_and(|held| held.blorb.is_some());
+
+        self.sized(stanza)?;
+
+        Ok(())
+    }
+
+    /// Drain the stage's pending paints into the cycle's ops.
+    ///
+    /// Called ahead of every picture op too, so the canvas keeps
+    /// the turn's true order -- text written before a picture
+    /// lands under it, text after lands over.
+    fn stage_flowed(&mut self) {
+        let Some(stage) = self.stage.as_mut() else {
+            return;
+        };
+        let paints = stage.stage.paints();
+
+        stage.ops.extend(oped(&paints, CELL, &stage.minted));
+        stage.stage.sweep();
+    }
+
+    /// §8.3.1's -1 as the colour showing under the cursor.
+    ///
+    /// The painted stage itself answers, as the glass's real pixel
+    /// does: the drawn ops walked newest-first, an image's own
+    /// pixel or a fill's colour, and the found colour minted as a
+    /// code past the named ones -- how Zork Zero's status text
+    /// sits on its ribbons without a seam.
+    fn stage_sampled(&mut self, code: i32) -> Result<i32, VoxamError> {
+        if code != PIXEL_COLOUR {
+            return Ok(code);
+        }
+
+        self.stage_flowed();
+
+        let stage = self.stage.as_mut().expect("a staged face samples");
+        let (line, column) = stage.stage.screen_cursor();
+        let css = plotted(
+            &stage.journal,
+            &stage.ops,
+            i64::from(column) - 1,
+            i64::from(line) - 1,
+            stage.gallery.as_mut(),
+        )?;
+
+        Ok(minted_code(stage, css))
+    }
+
+    /// Fold the cycle's ops into the repaint journal.
+    ///
+    /// A fill covering the whole stage starts the journal over, a
+    /// setcolor restated ahead of it so a rescaled canvas's clear
+    /// wears the right paper. Games repaper the stage at every
+    /// scene, so the journal stays a scene deep.
+    fn stage_journaled(&mut self, ops: &[Object]) {
+        let (width, height) = self.stage_logical();
+        let stage = self.stage.as_mut().expect("a staged face journals");
+
+        for op in ops {
+            if op.get("special").and_then(Value::as_str) == Some("fill")
+                && op.get("x").and_then(Value::as_int) == Some(0)
+                && op.get("y").and_then(Value::as_int) == Some(0)
+                && op.get("width").and_then(Value::as_int) == Some(width)
+                && op.get("height").and_then(Value::as_int) == Some(height)
+            {
+                let mut setcolor = Object::new();
+
+                setcolor.set("special", "setcolor");
+                setcolor.set("color", op.get("color").cloned().unwrap_or(Value::Null));
+
+                stage.journal = vec![setcolor, op.clone()];
+            } else {
+                stage.journal.push(op.clone());
+            }
+        }
+    }
+
+    /// A picture's drawn height and width (§15 picture_data).
+    ///
+    /// The Reso arithmetic is the gallery's, exactly as at the
+    /// glass -- though on a stage pinned to the standard window
+    /// the Elbow Room Factor is one, and only each picture's own
+    /// standard ratio remains (Blorb: The Resolution Chunk).
+    fn stage_picture_data(&self, number: u16) -> Result<Option<(u16, u16)>, VoxamError> {
+        let Some(gallery) = self.stage.as_ref().and_then(|held| held.gallery.as_ref()) else {
+            return Ok(None);
+        };
+        let Some((height, width)) = gallery.size(u32::from(number))? else {
+            return Ok(None);
+        };
+        let (logical_w, logical_h) = self.stage_logical();
+        let factor = gallery.scale(u32::from(number), logical_w as u32, logical_h as u32);
+        let drawn = |value: u32| -> u16 {
+            ((i64::from(value) * factor.numerator()) / factor.denominator()) as u16
+        };
+
+        Ok(Some((drawn(height), drawn(width))))
+    }
+
+    /// §15 draw_picture as an image op at its unit position.
+    ///
+    /// A Rect placard has no bytes to send and draws nothing --
+    /// invisible by design, its size still spoken for layout. The
+    /// plotting runs through the gallery's adaptive-palette seam:
+    /// a scene's plot absorbs its palette, the chrome wears the
+    /// Current Palette -- and a plot that changes the palette
+    /// re-plots the standing chrome in it, the wire's spelling of
+    /// the hardware recolouring Infocom's interpreters did (Blorb:
+    /// The Adaptive Palette Chunk).
+    fn stage_draw_picture(
+        &mut self,
+        number: u16,
+        line: u16,
+        column: u16,
+    ) -> Result<(), VoxamError> {
+        if self
+            .stage
+            .as_ref()
+            .is_none_or(|held| held.gallery.is_none())
+        {
+            return Ok(());
+        }
+
+        let Some((height, width)) = self.stage_picture_data(number)? else {
+            return Ok(());
+        };
+        let Some(url) = self.stage_pictured(u32::from(number))? else {
+            return Ok(());
+        };
+
+        self.stage_flowed();
+
+        let stage = self.stage.as_mut().expect("a staged face draws");
+        let mut op = Object::new();
+
+        op.set("special", "image");
+        op.set("image", i64::from(number));
+        op.set("url", url);
+        op.set("x", i64::from(column) - 1);
+        op.set("y", i64::from(line) - 1);
+        op.set("width", i64::from(width));
+        op.set("height", i64::from(height));
+        stage.ops.push(op);
+
+        let serial = stage.gallery.as_ref().expect("checked above").serial();
+        let adaptive = stage
+            .gallery
+            .as_ref()
+            .expect("checked above")
+            .adaptive()
+            .contains(&u32::from(number));
+
+        if adaptive {
+            match stage
+                .chrome
+                .iter_mut()
+                .find(|(held, _)| *held == u32::from(number))
+            {
+                Some((_, seat)) => *seat = (line, column),
+                None => stage.chrome.push((u32::from(number), (line, column))),
+            }
+        }
+
+        let redress = serial != stage.palette_serial;
+
+        if redress {
+            stage.palette_serial = serial;
+
+            self.stage_redressed()?;
+        }
+
+        Ok(())
+    }
+
+    /// The picture plotted for the wire, its palette truly worn.
+    ///
+    /// The gallery decodes through the adaptive dance and the
+    /// plotted pixels are re-encoded whole -- a display handed an
+    /// adaptive stub's own bytes would paint the placeholder
+    /// palette. Encodings are remembered per palette era, so the
+    /// chrome only pays its decode bill again when a scene
+    /// re-dresses it.
+    fn stage_pictured(&mut self, number: u32) -> Result<Option<String>, VoxamError> {
+        let stage = self.stage.as_mut().expect("a staged face plots");
+        let Some(gallery) = stage.gallery.as_mut() else {
+            return Ok(None);
+        };
+        let Some(picture) = gallery.picture(number)? else {
+            return Ok(None);
+        };
+        let era = if gallery.adaptive().contains(&number) {
+            i64::from(gallery.serial())
+        } else {
+            -1
+        };
+
+        if stage.urls.get(&number).is_none_or(|(held, _)| *held != era) {
+            let spelled = b64(&png::encoded(&picture));
+
+            stage
+                .urls
+                .insert(number, (era, format!("data:image/png;base64,{spelled}")));
+        }
+
+        Ok(Some(stage.urls[&number].1.clone()))
+    }
+
+    /// Re-plot the standing chrome in the fresh Current Palette.
+    ///
+    /// Infocom's interpreters recoloured the chrome through the
+    /// hardware palette without replotting; the wire has no
+    /// palette hardware, so the chrome replots -- the same
+    /// positions, the new dress.
+    fn stage_redressed(&mut self) -> Result<(), VoxamError> {
+        let standing = self
+            .stage
+            .as_ref()
+            .expect("a staged face redresses")
+            .chrome
+            .clone();
+
+        for (number, (line, column)) in standing {
+            self.stage_draw_picture(number as u16, line, column)?;
+        }
+
+        Ok(())
+    }
+
+    /// §15 erase_picture: the picture's rectangle, papered over.
+    fn stage_erase_picture(
+        &mut self,
+        number: u16,
+        line: u16,
+        column: u16,
+    ) -> Result<(), VoxamError> {
+        let Some((height, width)) = self.stage_picture_data(number)? else {
+            return Ok(());
+        };
+
+        self.stage_flowed();
+
+        let stage = self.stage.as_mut().expect("a staged face erases");
+        let color = coloured(stage.stage.background(), &stage.minted, PAPER_DEFAULT);
+        let mut op = Object::new();
+
+        op.set("special", "fill");
+        op.set("x", i64::from(column) - 1);
+        op.set("y", i64::from(line) - 1);
+        op.set("width", i64::from(width));
+        op.set("height", i64::from(height));
+        op.set("color", color);
+        stage.ops.push(op);
+
+        Ok(())
     }
 
     // -- the conversation's opening ----------------------------------------
@@ -238,6 +709,10 @@ impl GlkOteFrontend {
     /// machine is booted over this display -- the header reads it
     /// once at boot (§8.4). Fails when the metrics carry no size.
     pub fn begin(&mut self, stanza: &Object) -> Result<(), VoxamError> {
+        if self.stage.is_some() {
+            return self.begin_staged(stanza);
+        }
+
         let support: Vec<String> = match stanza.get("support") {
             Some(Value::List(held)) => held
                 .iter()
@@ -377,8 +852,18 @@ impl GlkOteFrontend {
         }
     }
 
-    /// The typed line and its newline, in the input dress.
+    /// The typed line and its newline, in the input dress -- or,
+    /// on a stage, onto the stage at the read's own cursor: a
+    /// Version 6 interpreter echoes into the window itself
+    /// (§7.1.2). The wire's editor showed the typing, and the
+    /// landed line prints here so the screen keeps it.
     fn echoed(&mut self, line: &str) {
+        if let Some(stage) = self.stage.as_mut() {
+            stage.stage.write(&format!("{line}\n"));
+
+            return;
+        }
+
         self.runs.push(Run::text("input", 0, &format!("{line}\n")));
     }
 
@@ -609,6 +1094,12 @@ impl Frontend for SharedFace {
     fn write(&mut self, text: &str) {
         let mut face = self.face.borrow_mut();
 
+        if let Some(stage) = face.stage.as_mut() {
+            stage.stage.write(text);
+
+            return;
+        }
+
         if face.model.selected() == UPPER {
             face.model.write(text);
         } else {
@@ -621,6 +1112,12 @@ impl Frontend for SharedFace {
     /// §15 print_table: stamped in the upper, stacked below.
     fn write_rectangle(&mut self, rows: &[String]) {
         let mut face = self.face.borrow_mut();
+
+        if let Some(stage) = face.stage.as_mut() {
+            stage.stage.write_rectangle(rows);
+
+            return;
+        }
 
         if face.model.selected() == UPPER {
             face.model.write_rectangle(rows);
@@ -636,7 +1133,12 @@ impl Frontend for SharedFace {
     /// The §8.2 status line, drawn onto the model's top row.
     fn show_status(&mut self, status: &Status) {
         let mut face = self.face.borrow_mut();
-        let result = face.model.show_status(status);
+        let result = match face.stage.as_ref() {
+            // §8.2 has no line on a stage; the model says so
+            // loudly.
+            Some(stage) => stage.stage.show_status(status),
+            None => face.model.show_status(status),
+        };
 
         face.noted(result);
     }
@@ -663,17 +1165,34 @@ impl Frontend for SharedFace {
     fn set_style(&mut self, style: u16) {
         let mut face = self.face.borrow_mut();
 
+        if let Some(stage) = face.stage.as_mut() {
+            // §8.7.1: the stage keeps every window's own dress.
+            stage.stage.set_style(style);
+
+            return;
+        }
+
         face.model.set_style(style);
         face.style = if style == 0 { 0 } else { face.style | style };
     }
 
     /// Fonts route to the model; the dress keys on styles.
     fn set_font(&mut self, font: u16) {
-        self.face.borrow_mut().model.set_font(font);
+        let mut face = self.face.borrow_mut();
+
+        match face.stage.as_mut() {
+            Some(stage) => stage.stage.set_font(font),
+            None => face.model.set_font(font),
+        }
     }
 
-    /// The display wraps for itself; the model need not.
-    fn set_buffering(&mut self, _buffered: bool) {}
+    /// The display wraps for itself; the model need not -- but the
+    /// stage wraps for itself, so its buffering is real (§7.2.2).
+    fn set_buffering(&mut self, buffered: bool) {
+        if let Some(stage) = self.face.borrow_mut().stage.as_mut() {
+            stage.stage.set_buffering(buffered);
+        }
+    }
 
     /// Resize the upper window (§8.7.2.1); the model rules.
     ///
@@ -686,6 +1205,16 @@ impl Frontend for SharedFace {
     /// Parchment extend the same box.
     fn split_window(&mut self, lines: u16) {
         let mut face = self.face.borrow_mut();
+
+        if let Some(stage) = face.stage.as_mut() {
+            // §8.8.4.1's tiling, the stage's own arithmetic.
+            // Splitting clears nothing on a stage, so a quote
+            // box's pixels stand without any high-water courtesy.
+            stage.stage.split_window(i32::from(lines));
+
+            return;
+        }
+
         let result = face.model.split_window(i32::from(lines));
 
         face.noted(result);
@@ -698,7 +1227,11 @@ impl Frontend for SharedFace {
     /// Select the window taking the next printing (§8.7.2).
     fn set_window(&mut self, window: u16) {
         let mut face = self.face.borrow_mut();
-        let result = face.model.set_window(window);
+        let result = match face.stage.as_mut() {
+            // Select among all eight (§8.8.3).
+            Some(stage) => stage.stage.set_window(i32::from(window)),
+            None => face.model.set_window(window),
+        };
 
         face.noted(result);
     }
@@ -706,6 +1239,14 @@ impl Frontend for SharedFace {
     /// Place the upper window's cursor (§8.7.2.3).
     fn set_cursor(&mut self, line: u16, column: u16) {
         let mut face = self.face.borrow_mut();
+
+        if let Some(stage) = face.stage.as_mut() {
+            // The selected window's cursor, in its own units.
+            stage.stage.set_cursor(i32::from(line), i32::from(column));
+
+            return;
+        }
+
         let result = face.model.set_cursor(line, column);
 
         face.noted(result);
@@ -713,7 +1254,15 @@ impl Frontend for SharedFace {
 
     /// What get_cursor reads back: the model's own ledger.
     fn cursor_position(&self) -> (u16, u16) {
-        let (line, column) = self.face.borrow_mut().model.get_cursor();
+        let mut face = self.face.borrow_mut();
+
+        if let Some(stage) = face.stage.as_mut() {
+            let (line, column) = stage.stage.get_cursor();
+
+            return (line as u16, column as u16);
+        }
+
+        let (line, column) = face.model.get_cursor();
 
         (line as u16, column as u16)
     }
@@ -725,6 +1274,24 @@ impl Frontend for SharedFace {
     /// (§8.7.3.3).
     fn erase_window(&mut self, window: i32) {
         let mut face = self.face.borrow_mut();
+
+        if face.stage.is_some() {
+            // §8.7.3: the stage fills; its paint carries the
+            // erasure. A whole-screen erasure takes the drawn
+            // chrome with it, as the glass's does -- nothing is
+            // left to re-dress.
+            let stage = face.stage.as_mut().expect("staged");
+            let result = stage.stage.erase_window(window).map(|_| ());
+
+            if window < 0 {
+                stage.chrome.clear();
+            }
+
+            face.noted(result);
+
+            return;
+        }
+
         let result = face.model.erase_window(window);
 
         face.noted(result);
@@ -739,9 +1306,17 @@ impl Frontend for SharedFace {
         }
     }
 
-    /// To the end of the line -- meaningful in the grid alone.
-    fn erase_line(&mut self) {
+    /// To the end of the line -- meaningful in the grid alone,
+    /// though the stage honours the Version 6 pixel-width form too
+    /// (§8.8.5.2).
+    fn erase_line(&mut self, pixels: Option<i32>) {
         let mut face = self.face.borrow_mut();
+
+        if let Some(stage) = face.stage.as_mut() {
+            stage.stage.erase_line(pixels);
+
+            return;
+        }
 
         if face.model.selected() == UPPER {
             face.model.erase_line();
@@ -816,6 +1391,27 @@ impl Frontend for SharedFace {
     fn set_colour(&mut self, foreground: i32, background: i32) {
         let mut face = self.face.borrow_mut();
 
+        if face.stage.is_some() {
+            // §8.3.1, the under-cursor sample resolved to a cell
+            // truth.
+            let sampled = face
+                .stage_sampled(foreground)
+                .and_then(|fg| face.stage_sampled(background).map(|bg| (fg, bg)));
+
+            match sampled {
+                Ok((fg, bg)) => {
+                    face.stage
+                        .as_mut()
+                        .expect("staged")
+                        .stage
+                        .set_colour(fg, bg);
+                }
+                Err(error) => face.noted(Err(error)),
+            }
+
+            return;
+        }
+
         face.model.set_colour(foreground, background);
 
         let (fg, bg) = face.ink;
@@ -836,6 +1432,150 @@ impl Frontend for SharedFace {
 
     fn draw_arc_image(&mut self, image: u16, mode: u16) {
         self.face.borrow_mut().hang_arc_image(image, mode);
+    }
+
+    fn has_pictures(&self) -> bool {
+        self.face
+            .borrow()
+            .stage
+            .as_ref()
+            .is_some_and(|held| held.has_pictures)
+    }
+
+    fn has_stage(&self) -> bool {
+        self.face.borrow().stage.is_some()
+    }
+
+    fn font_width(&self) -> u16 {
+        if self.face.borrow().stage.is_some() {
+            CELL as u16
+        } else {
+            1
+        }
+    }
+
+    fn font_height(&self) -> u16 {
+        if self.face.borrow().stage.is_some() {
+            CELL as u16
+        } else {
+            1
+        }
+    }
+
+    /// A picture's drawn height and width (§15 picture_data),
+    /// Reso-scaled by the gallery's own arithmetic.
+    fn picture_data(&self, number: u16) -> Option<(u16, u16)> {
+        let mut face = self.face.borrow_mut();
+
+        match face.stage_picture_data(number) {
+            Ok(held) => held,
+            Err(error) => {
+                face.noted(Err(error));
+
+                None
+            }
+        }
+    }
+
+    /// The count of drawable pictures and the art's release.
+    fn picture_census(&self) -> (u16, u16) {
+        let face = self.face.borrow();
+
+        match face.stage.as_ref().and_then(|held| held.gallery.as_ref()) {
+            Some(gallery) => (gallery.count() as u16, gallery.release),
+            None => (0, 0),
+        }
+    }
+
+    fn draw_picture(&mut self, number: u16, line: u16, column: u16) {
+        let mut face = self.face.borrow_mut();
+        let result = face.stage_draw_picture(number, line, column);
+
+        face.noted(result);
+    }
+
+    fn erase_picture(&mut self, number: u16, line: u16, column: u16) {
+        let mut face = self.face.borrow_mut();
+
+        if face.stage.is_none() {
+            return;
+        }
+
+        let result = face.stage_erase_picture(number, line, column);
+
+        face.noted(result);
+    }
+
+    /// §8.8 geometry, forwarded whole to the stage's ledger.
+    fn place_window(&mut self, window: u16, line: u16, column: u16, height: u16, width: u16) {
+        let mut face = self.face.borrow_mut();
+
+        if face.stage.is_none() {
+            return;
+        }
+
+        let result = face.stage.as_mut().expect("staged").stage.place_window(
+            i32::from(window),
+            i32::from(line),
+            i32::from(column),
+            i32::from(height),
+            i32::from(width),
+        );
+
+        face.noted(result);
+    }
+
+    /// §15 scroll_window, in units.
+    fn scroll_window(&mut self, window: u16, pixels: i32) {
+        let mut face = self.face.borrow_mut();
+
+        if face.stage.is_none() {
+            return;
+        }
+
+        let result = face
+            .stage
+            .as_mut()
+            .expect("staged")
+            .stage
+            .scroll_window(i32::from(window), pixels);
+
+        face.noted(result);
+    }
+
+    /// §8.8.3.2.1 margins, in units.
+    fn set_margins(&mut self, window: u16, left: u16, right: u16) {
+        let mut face = self.face.borrow_mut();
+
+        if face.stage.is_none() {
+            return;
+        }
+
+        let result = face.stage.as_mut().expect("staged").stage.set_margins(
+            i32::from(window),
+            i32::from(left),
+            i32::from(right),
+        );
+
+        face.noted(result);
+    }
+
+    /// §8.8.3.2.6's budget, the game's own hand on it.
+    fn set_line_count(&mut self, window: u16, count: i32) {
+        let mut face = self.face.borrow_mut();
+
+        if face.stage.is_none() {
+            return;
+        }
+
+        let result = face
+            .stage
+            .as_mut()
+            .expect("staged")
+            .stage
+            .set_line_count(i32::from(window), count);
+
+        face.noted(result);
     }
 
     /// Start a sampled sound on the wire's one channel (§9.4).
@@ -913,14 +1653,13 @@ pub struct SharedFace {
 
 /// The face a story's screen model asks for.
 ///
-/// The two-window picture for every version but 6; the §8.8 stage
-/// face arrives with the stage rung, and until it does a Version 6
-/// story is refused here rather than mis-served.
+/// The §8.8 stage for Version 6, the two-window picture for every
+/// other version -- one seam, so the CLI and the web shell route
+/// alike. Fails only when a stage Blorb's art census cannot be
+/// hung.
 pub fn fronted(version: u8, resources: Option<Resources>) -> Result<GlkOteFrontend, VoxamError> {
     if version == STAGE_VERSION {
-        return Err(glkote_error(
-            "the Version 6 stage face is not yet ported; the stage rung carries it".into(),
-        ));
+        return GlkOteFrontend::staged(version, resources);
     }
 
     Ok(GlkOteFrontend::new(version, resources))
@@ -999,6 +1738,10 @@ impl Session {
     pub fn render(&mut self, exit: bool) -> Result<Object, VoxamError> {
         if let Some(fault) = self.face.borrow_mut().fault.take() {
             return Err(fault);
+        }
+
+        if self.face.borrow().stage.is_some() {
+            return self.render_staged(exit);
         }
 
         let mut face = self.face.borrow_mut();
@@ -1136,35 +1879,123 @@ impl Session {
             None => {}
         }
 
-        // The timer field for the cycle, from the standing wait: a
-        // fresh timed read restarts the display's clock even at
-        // the same cadence, as §15 restarts its own.
-        let serial = self.machine.wait_serial();
-
-        match self.machine.waiting() {
-            Some(Waiting::Read(held)) if held.time != 0 && held.routine != 0 => {
-                face.page.timer(
-                    i64::from(held.time) * TENTH_MS,
-                    self.last_read != Some(serial),
-                );
-
-                self.last_read = Some(serial);
-            }
-            Some(_) => {
-                face.page.timer(0, false);
-
-                self.last_read = Some(serial);
-            }
-            None => {
-                face.page.timer(0, false);
-
-                self.last_read = None;
-            }
-        }
-
+        clocked(&self.machine, &mut self.last_read, &mut face);
         face.sung();
 
         let refresh = std::mem::replace(&mut face.refresh_owed, false);
+
+        face.page.update(exit, refresh)
+    }
+
+    /// Compose the stage into one scaled canvas update.
+    ///
+    /// The window entry names the art's logical space under the
+    /// display's box; the cycle's draw ops travel in the turn's
+    /// true order, and a repaint replays the journal -- everything
+    /// since the last whole-stage fill.
+    fn render_staged(&mut self, exit: bool) -> Result<Object, VoxamError> {
+        let mut face = self.face.borrow_mut();
+        let (width, height) = face.size;
+        let logical = face.stage_logical();
+        let ident = match face.stage.as_ref().expect("staged").canvas_ident {
+            Some(held) => held,
+            None => {
+                let minted = face.next_ident;
+
+                face.next_ident += 1;
+                face.stage.as_mut().expect("staged").canvas_ident = Some(minted);
+
+                minted
+            }
+        };
+
+        face.page.window(
+            ident,
+            "graphics",
+            0,
+            (0, 0, width, height),
+            WindowSpec {
+                graphsize: Some(logical),
+                scaled: true,
+                ..WindowSpec::default()
+            },
+        )?;
+
+        face.stage_flowed();
+
+        let held = face.stage.as_ref().expect("staged").ops.clone();
+
+        face.stage_journaled(&held);
+
+        let refresh = std::mem::replace(&mut face.refresh_owed, false);
+        let stage = face.stage.as_mut().expect("staged");
+        let repaint = std::mem::replace(&mut stage.repaint_owed, false) || refresh;
+        let ops = if repaint {
+            stage.ops.clear();
+
+            stage.journal.clone()
+        } else {
+            std::mem::take(&mut stage.ops)
+        };
+
+        if !ops.is_empty() {
+            face.page.draw(ident, ops)?;
+        }
+
+        match self.machine.waiting() {
+            Some(Waiting::File(filing)) => {
+                face.page.prompt(
+                    if filing.purpose == Purpose::Save {
+                        "write"
+                    } else {
+                        "read"
+                    },
+                    "save",
+                )?;
+            }
+            Some(Waiting::Read(held)) => {
+                // An input pause rests the scroll budgets, as
+                // every face's read does (§8.8.3.2.6).
+                face.stage.as_mut().expect("staged").stage.rest();
+
+                if held.wants == Wants::Line {
+                    let (line, column) = face.stage.as_mut().expect("staged").stage.screen_cursor();
+                    let mut codes: Vec<u16> = held.terminators.iter().copied().collect();
+
+                    codes.sort_unstable();
+
+                    // The editor writes in the window's own ink --
+                    // without it the field wears the browser's
+                    // default black, invisible on a dark stage.
+                    let ink = {
+                        let stage = face.stage.as_ref().expect("staged");
+
+                        coloured(stage.stage.foreground(), &stage.minted, INK_DEFAULT)
+                    };
+
+                    face.page.line_input(
+                        ident,
+                        held.capacity as i64,
+                        LineSpec {
+                            terminators: codes.into_iter().filter_map(terminator_name).collect(),
+                            cursor: Some((i64::from(column) - 1, i64::from(line) - 1)),
+                            cell: Some((CELL, CELL)),
+                            ink: Some(ink),
+                            mouse: held.terminators.contains(&SINGLE_CLICK),
+                            ..LineSpec::default()
+                        },
+                    )?;
+                } else {
+                    // A keystroke read hears a click the way it
+                    // hears any key (§10.3.3).
+                    face.page.char_input(ident, None, false, true)?;
+                }
+            }
+            None => {}
+        }
+
+        clocked(&self.machine, &mut self.last_read, &mut face);
+        face.sung();
 
         face.page.update(exit, refresh)
     }
@@ -1306,6 +2137,10 @@ impl Session {
     /// far; a click nothing can hear passes with the wait
     /// standing.
     fn pointed(&mut self, stanza: &Object) -> Result<Verdict, VoxamError> {
+        if self.face.borrow().stage.is_some() {
+            return self.stage_pointed(stanza);
+        }
+
         let grid = self.face.borrow().grid_ident;
 
         let Some(grid) = grid else {
@@ -1325,6 +2160,51 @@ impl Session {
 
         let typed = partials(stanza.get("partial"))
             .get(&BUFFER)
+            .cloned()
+            .unwrap_or_default();
+        let x = stanza.get("x").and_then(Value::as_int).unwrap_or(0);
+        let y = stanza.get("y").and_then(Value::as_int).unwrap_or(0);
+        let heard = self
+            .machine
+            .deliver_click((x + 1) as u16, (y + 1) as u16, &typed)?;
+
+        if heard {
+            Ok(Verdict::Advance)
+        } else {
+            Ok(Verdict::Pass)
+        }
+    }
+
+    /// A click on the stage, §10.3-spelled in units.
+    ///
+    /// The canvas hears clicks in the stage's own logical units,
+    /// 0-based; the header extension counts from (1,1), one step
+    /// over (§10.3.2).
+    fn stage_pointed(&mut self, stanza: &Object) -> Result<Verdict, VoxamError> {
+        let canvas = self
+            .face
+            .borrow()
+            .stage
+            .as_ref()
+            .expect("staged")
+            .canvas_ident;
+
+        let Some(canvas) = canvas else {
+            return Ok(Verdict::Pass);
+        };
+
+        if stanza.get("window").and_then(Value::as_int) != Some(canvas) {
+            return Ok(Verdict::Pass);
+        }
+
+        if !matches!(self.machine.waiting(), Some(Waiting::Read(_))) {
+            // No read stands to hear a click: the misaimed-event
+            // shrug, as at the grid.
+            return Ok(Verdict::Pass);
+        }
+
+        let typed = partials(stanza.get("partial"))
+            .get(&canvas)
             .cloned()
             .unwrap_or_default();
         let x = stanza.get("x").and_then(Value::as_int).unwrap_or(0);
@@ -1424,6 +2304,25 @@ impl Session {
     /// band whole (GlkOte: Redraw Events); without one there is
     /// nothing here to redraw.
     fn reshaped(&mut self, kind: &str, stanza: &Object) -> Result<Verdict, VoxamError> {
+        if self.face.borrow().stage.is_some() {
+            // The stage's units never move with the display's box,
+            // so the machine hears nothing of an arrange -- and a
+            // redraw means the display cleared its rescaled
+            // canvas, so the whole journal is owed (GlkOte: Redraw
+            // Events).
+            let mut face = self.face.borrow_mut();
+
+            if kind == "redraw" {
+                face.stage.as_mut().expect("staged").repaint_owed = true;
+
+                return Ok(Verdict::Stand);
+            }
+
+            face.sized(stanza)?;
+
+            return Ok(Verdict::Stand);
+        }
+
         if kind == "redraw" {
             let mut face = self.face.borrow_mut();
 
@@ -1587,6 +2486,256 @@ fn fronted_cover(cover: &ImageInfo) -> Object {
     span.set("alignment", "inlineup");
 
     span
+}
+
+/// The cycle's timer field, from the standing wait: a fresh timed
+/// read restarts the display's clock even at the same cadence, as
+/// §15 restarts its own.
+fn clocked(machine: &Machine, last_read: &mut Option<u64>, face: &mut GlkOteFrontend) {
+    let serial = machine.wait_serial();
+
+    match machine.waiting() {
+        Some(Waiting::Read(held)) if held.time != 0 && held.routine != 0 => {
+            face.page
+                .timer(i64::from(held.time) * TENTH_MS, *last_read != Some(serial));
+
+            *last_read = Some(serial);
+        }
+        Some(_) => {
+            face.page.timer(0, false);
+
+            *last_read = Some(serial);
+        }
+        None => {
+            face.page.timer(0, false);
+
+            *last_read = None;
+        }
+    }
+}
+
+/// The code a sampled colour wears, minted once per colour.
+fn minted_code(stage: &mut StageHalf, css: String) -> i32 {
+    if let Some(&held) = stage.codes.get(&css) {
+        return held;
+    }
+
+    let held = stage.next_code;
+
+    stage.next_code += 1;
+    stage.codes.insert(css.clone(), held);
+    stage.minted.insert(held, css);
+
+    held
+}
+
+/// Stage paints as the dialect's draw ops, 0-based on the canvas.
+///
+/// Text paints arrive one dressed character at a time; runs along
+/// a row in the same dress coalesce into one op, the wire staying
+/// light. Fills and shifts translate one to one, the §8.3.1 codes
+/// becoming the shared palette's CSS -- the minted sampled colours
+/// included.
+fn oped(paints: &[Paint], cell: i64, minted: &HashMap<i32, String>) -> Vec<Object> {
+    let mut ops: Vec<Object> = Vec::new();
+
+    for paint in paints {
+        match paint {
+            Paint::Text(held) => {
+                let op = texted(held, cell, minted);
+                let continued = ops.last().is_some_and(|last| joins(last, &op, cell));
+
+                if continued {
+                    let last = ops.last_mut().expect("checked above");
+                    let text = format!(
+                        "{}{}",
+                        last.get("text").and_then(Value::as_str).unwrap_or_default(),
+                        op.get("text").and_then(Value::as_str).unwrap_or_default()
+                    );
+
+                    last.set("text", text);
+                } else {
+                    ops.push(op);
+                }
+            }
+            Paint::Fill(held) => {
+                let mut op = Object::new();
+
+                op.set("special", "fill");
+                op.set("x", i64::from(held.column) - 1);
+                op.set("y", i64::from(held.line) - 1);
+                op.set("width", i64::from(held.width));
+                op.set("height", i64::from(held.height));
+                op.set("color", coloured(held.background, minted, PAPER_DEFAULT));
+                ops.push(op);
+            }
+            Paint::Shift(held) => {
+                let mut op = Object::new();
+
+                op.set("special", "shift");
+                op.set("x", i64::from(held.column) - 1);
+                op.set("y", i64::from(held.line) - 1);
+                op.set("width", i64::from(held.width));
+                op.set("height", i64::from(held.height));
+                op.set("rise", i64::from(held.rise));
+                ops.push(op);
+            }
+        }
+    }
+
+    ops
+}
+
+/// One placed character as a text op, reverse pre-swapped.
+///
+/// The dress travels resolved: ink and paper as CSS with the
+/// stage's own defaults for code 1, reverse video already swapped,
+/// bold and italic as the op's flags (§8.7.1).
+fn texted(paint: &TextPaint, cell: i64, minted: &HashMap<i32, String>) -> Object {
+    let held = paint.cell;
+    let mut ink = coloured(held.foreground, minted, INK_DEFAULT);
+    let mut paper = coloured(held.background, minted, PAPER_DEFAULT);
+
+    if held.style & REVERSE != 0 {
+        std::mem::swap(&mut ink, &mut paper);
+    }
+
+    let mut op = Object::new();
+
+    op.set("special", "text");
+    op.set("x", i64::from(paint.column) - 1);
+    op.set("y", i64::from(paint.line) - 1);
+    op.set("text", held.character.to_string());
+    op.set(
+        "cell",
+        Value::List(vec![Value::Int(cell), Value::Int(cell)]),
+    );
+    op.set("fg", ink);
+    op.set("bg", paper);
+
+    if held.style & BOLD != 0 {
+        op.set("bold", true);
+    }
+
+    if held.style & ITALIC != 0 {
+        op.set("italic", true);
+    }
+
+    op
+}
+
+/// Whether a fresh text op continues the last one's run.
+fn joins(last: &Object, op: &Object, cell: i64) -> bool {
+    let length = last
+        .get("text")
+        .and_then(Value::as_str)
+        .map_or(0, |text| text.chars().count() as i64);
+
+    last.get("special").and_then(Value::as_str) == Some("text")
+        && op.get("y") == last.get("y")
+        && op.get("x").and_then(Value::as_int)
+            == last
+                .get("x")
+                .and_then(Value::as_int)
+                .map(|x| x + cell * length)
+        && ["fg", "bg", "bold", "italic"]
+            .iter()
+            .all(|key| op.get(key) == last.get(key))
+}
+
+/// The colour showing at a canvas point, newest paint first.
+///
+/// §8.3.1's sample asks for the pixel under the cursor, and the
+/// drawn ops are the stage's pixels: an image's own pixel answers
+/// -- a transparent hole deferring to what shows through beneath
+/// -- a fill answers its colour, and paint never laid answers the
+/// stage's default paper. Text ops are passed over: a game samples
+/// its art and its fills, not its letters.
+fn plotted(
+    journal: &[Object],
+    ops: &[Object],
+    x: i64,
+    y: i64,
+    mut gallery: Option<&mut Gallery>,
+) -> Result<String, VoxamError> {
+    for op in ops.iter().rev().chain(journal.iter().rev()) {
+        let special = op
+            .get("special")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        if special == "image" {
+            if let Some(gallery) = gallery.as_deref_mut()
+                && let Some(css) = art_pixel(op, x, y, gallery)?
+            {
+                return Ok(css);
+            }
+        } else if special == "fill" && within(op, x, y) {
+            return Ok(op
+                .get("color")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string());
+        }
+    }
+
+    Ok(PAPER_DEFAULT.to_string())
+}
+
+/// One drawn image's pixel at a canvas point, None to look on.
+///
+/// The point maps back through the op's drawn size to the art's
+/// own pixels -- Reso scaling undone by the same ratio that
+/// applied it -- and a fully transparent pixel defers to whatever
+/// the point shows through to.
+fn art_pixel(
+    op: &Object,
+    x: i64,
+    y: i64,
+    gallery: &mut Gallery,
+) -> Result<Option<String>, VoxamError> {
+    if !within(op, x, y) {
+        return Ok(None);
+    }
+
+    let number = op.get("image").and_then(Value::as_int).unwrap_or_default();
+    let Some(picture) = gallery.picture(number as u32)? else {
+        return Ok(None);
+    };
+    let corner = |key: &str| op.get(key).and_then(Value::as_int).unwrap_or_default();
+    let px = (x - corner("x")) * i64::from(picture.width) / corner("width");
+    let py = (y - corner("y")) * i64::from(picture.height) / corner("height");
+
+    if let Some(clear) = &picture.clear
+        && clear[py as usize][px as usize]
+    {
+        return Ok(None);
+    }
+
+    let (red, green, blue) = picture.rows[py as usize][px as usize];
+
+    Ok(Some(format!("#{red:02x}{green:02x}{blue:02x}")))
+}
+
+/// Whether a drawn op's rectangle covers a canvas point.
+fn within(op: &Object, x: i64, y: i64) -> bool {
+    let corner = |key: &str| op.get(key).and_then(Value::as_int).unwrap_or_default();
+
+    corner("x") <= x
+        && x < corner("x") + corner("width")
+        && corner("y") <= y
+        && y < corner("y") + corner("height")
+}
+
+/// A colour code as CSS, the minted samples consulted first --
+/// then the shared palette, and the stage's own default for
+/// everything else, code 1 included.
+fn coloured(code: i32, minted: &HashMap<i32, String>, default: &str) -> String {
+    if let Some(held) = minted.get(&code) {
+        return held.clone();
+    }
+
+    css(code).unwrap_or_else(|| default.to_string())
 }
 
 /// An event value as the text the reference's str() would read.

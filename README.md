@@ -68,7 +68,8 @@ http://127.0.0.1:8080 with the machine's own tab icon and, when a
 Blorb's iFiction record names it, the story's own title; a page
 reload restarts the game. `--glkote` is the same conversation on
 stdio, one stanza per line, for shells that host the display
-themselves. Version 6 Z-Machine stories wait on the stage face.
+themselves. Version 6 Z-Machine stories play on the §8.8 stage:
+one scaled canvas, the art's own coordinate space.
 
 ## The desktop shell
 

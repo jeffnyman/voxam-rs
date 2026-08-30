@@ -7,8 +7,7 @@
 # recording's commands (lines to line reads, characters to
 # keystroke reads, a save slot to file asks) and never fires a
 # timer, so the drive is deterministic; the transcript is exactly
-# what serve wrote. Version 6 recordings wait on the stage rung
-# and are skipped by suffix.
+# what serve wrote. Version 6 sessions ride the stage dialect.
 #
 # Usage:
 #   certify/zglkote-diff.sh [recording.accept...]
@@ -57,13 +56,6 @@ swept=0
 for recording in $recordings; do
     name=$(basename "$recording" .accept)
     game=$(sed -n 's/^! GAME=//p' "$recording" | head -1)
-
-    case "$game" in
-        *.z6)
-            echo "SKIPPED (stage rung): $name"
-            continue
-            ;;
-    esac
 
     seed=$(sed -n 's/^! SEED=//p' "$recording" | head -1)
     story="$reference/acceptance/$game"

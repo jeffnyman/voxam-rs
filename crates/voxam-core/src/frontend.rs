@@ -93,7 +93,11 @@ pub trait Frontend {
     fn erase_window(&mut self, _window: i32) {}
 
     /// Erase rightward from the cursor (§15 erase_line).
-    fn erase_line(&mut self) {}
+    /// Erase rightward from the cursor: to the end of the line
+    /// with None, or a Version 6 width in pixels (§8.8.5.2) --
+    /// which only a stage can honour, so every other face ignores
+    /// it.
+    fn erase_line(&mut self, _pixels: Option<i32>) {}
 
     fn has_status_line(&self) -> bool {
         false

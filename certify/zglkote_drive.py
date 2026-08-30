@@ -102,7 +102,7 @@ def main() -> int:
         {
             "type": "init",
             "gen": 0,
-            "support": ["timer", "graphics", "graphicswin", "colors", "sound"],
+            "support": ["timer", "graphics", "graphicswin", "colors", "sound", "stage"],
             "metrics": {
                 "width": 800,
                 "height": 480,

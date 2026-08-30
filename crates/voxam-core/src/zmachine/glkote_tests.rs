@@ -1,6 +1,7 @@
 //! The Z face of GlkOte: the screen model composed, reads
-//! delivered. The stage half of the reference battery arrives
-//! with the stage rung.
+//! delivered -- and the Version 6 stage half: one scaled canvas,
+//! placed text, pictures through the adaptive dance, and the
+//! under-cursor samples.
 
 use super::*;
 use crate::blorb::Blorb;
@@ -39,6 +40,9 @@ const SAVING: &[u8] = &[0xBE, 0x00, 0xFF, 0x10, 0xBE, 0x01, 0xFF, 0x11, 0xBA];
 
 // EXT save alone, storing, then quit.
 const SAVED: &[u8] = &[0xBE, 0x00, 0xFF, 0x10, 0xBA];
+
+// EXT restore alone, storing, then quit.
+const RESTORED: &[u8] = &[0xBE, 0x01, 0xFF, 0x10, 0xBA];
 
 fn parsed(text: &str) -> Object {
     match loads(text).unwrap() {
@@ -362,10 +366,10 @@ fn the_quieter_ops_find_their_places() {
     face.set_window(1);
     face.set_cursor(1, 1);
     face.write_rectangle(&["AB".to_string()]);
-    face.erase_line();
+    face.erase_line(None);
     face.set_window(0);
     face.write_rectangle(&["row".to_string()]);
-    face.erase_line();
+    face.erase_line(None);
     face.set_font(4);
     face.erase_window(1);
 
@@ -1683,13 +1687,12 @@ fn a_session_serves_end_to_end() {
 // rather than mis-served.
 #[test]
 fn fronted_picks_the_face() {
-    assert!(fronted(5, None).is_ok());
+    assert!(fronted(6, None).expect("the stage face").stage.is_some());
     assert!(
-        fronted(6, None)
-            .map(|_| ())
-            .unwrap_err()
-            .to_string()
-            .contains("stage")
+        fronted(5, None)
+            .expect("a servable version")
+            .stage
+            .is_none()
     );
 }
 
@@ -1771,5 +1774,784 @@ fn misaimed_clicks_pass() {
             )))
             .unwrap(),
         Verdict::Pass
+    );
+}
+
+// -- the Version 6 stage half of the battery ----------------------
+
+fn stage_init() -> Object {
+    parsed(
+        r#"{"type":"init","gen":0,"support":["timer","stage","sound"],"metrics":{"width":1280,"height":800}}"#,
+    )
+}
+
+/// A 2-by-1 indexed-colour PNG, the reference battery's own press.
+fn indexed_png(colours: &[(u8, u8, u8)], alphas: &[u8], raw: &[u8]) -> Vec<u8> {
+    use crate::flate::{crc32, deflated};
+
+    let piece = |name: &[u8; 4], payload: &[u8]| -> Vec<u8> {
+        let mut out = (payload.len() as u32).to_be_bytes().to_vec();
+
+        out.extend_from_slice(name);
+        out.extend_from_slice(payload);
+        out.extend_from_slice(&crc32(payload, crc32(name, 0)).to_be_bytes());
+
+        out
+    };
+    let mut header = 2u32.to_be_bytes().to_vec();
+
+    header.extend_from_slice(&1u32.to_be_bytes());
+    header.extend_from_slice(&[8, 3, 0, 0, 0]);
+
+    let palette: Vec<u8> = colours
+        .iter()
+        .flat_map(|&(red, green, blue)| [red, green, blue])
+        .collect();
+    let mut art = crate::png::SIGNATURE.to_vec();
+
+    art.extend_from_slice(&piece(b"IHDR", &header));
+    art.extend_from_slice(&piece(b"PLTE", &palette));
+
+    if !alphas.is_empty() {
+        art.extend_from_slice(&piece(b"tRNS", alphas));
+    }
+
+    art.extend_from_slice(&piece(b"IDAT", &deflated(raw)));
+    art.extend_from_slice(&piece(b"IEND", &[]));
+
+    art
+}
+
+/// A stage Blorb: a 2x1 PNG, a 24x16 Rect, Reso, release 9.
+///
+/// The Reso standard window is 640x400 -- roomier than the MCGA
+/// default, proving the stage takes the art's own word -- and
+/// picture 1 carries a standard ratio of 2, so its drawn size
+/// doubles even on the standard window itself.
+fn staged_resources() -> Resources {
+    let art = indexed_png(&[(10, 20, 30), (40, 50, 60)], &[], &[0, 0, 1]);
+    let mut rect = 24u32.to_be_bytes().to_vec();
+
+    rect.extend_from_slice(&16u32.to_be_bytes());
+
+    let reln = chunk(b"RelN", &9u16.to_be_bytes());
+    let reso_words: Vec<u8> = [640u32, 400, 640, 400, 640, 400, 1, 2, 1, 0, 0, 0, 0]
+        .iter()
+        .flat_map(|word| word.to_be_bytes())
+        .collect();
+    let reso = chunk(b"Reso", &reso_words);
+    let ridx_size = 8 + 4 + 2 * 12;
+    let png_offset = 12 + ridx_size + reln.len() + reso.len();
+    let rect_offset = png_offset + 8 + art.len();
+    let mut index = 2u32.to_be_bytes().to_vec();
+
+    index.extend_from_slice(b"Pict");
+    index.extend_from_slice(&1u32.to_be_bytes());
+    index.extend_from_slice(&(png_offset as u32).to_be_bytes());
+    index.extend_from_slice(b"Pict");
+    index.extend_from_slice(&2u32.to_be_bytes());
+    index.extend_from_slice(&(rect_offset as u32).to_be_bytes());
+
+    let mut body = b"IFRS".to_vec();
+
+    body.extend_from_slice(&chunk(b"RIdx", &index));
+    body.extend_from_slice(&reln);
+    body.extend_from_slice(&reso);
+    body.extend_from_slice(&chunk(b"PNG ", &art));
+    body.extend_from_slice(&chunk(b"Rect", &rect));
+
+    Resources::new(Some(Blorb::parse(&chunk(b"FORM", &body)).unwrap()))
+}
+
+/// A stage Blorb in the APal style: two scenes and one chrome.
+///
+/// Pictures 1 and 3 are scenes wearing full palettes of their own;
+/// picture 2 is the adaptive chrome the APal chunk names, its stub
+/// palette waiting on whatever scene plots first.
+fn adaptive_resources() -> Resources {
+    let scene = indexed_png(&[(200, 0, 0), (0, 200, 0)], &[], &[0, 0, 1]);
+    let stub = indexed_png(&[(1, 2, 3), (4, 5, 6)], &[0], &[0, 0, 1]);
+    let other = indexed_png(&[(0, 0, 200), (200, 200, 0)], &[], &[0, 0, 1]);
+    let apal = chunk(b"APal", &2u32.to_be_bytes());
+    let wrapped: Vec<Vec<u8>> = [&scene, &stub, &other]
+        .iter()
+        .map(|art| chunk(b"PNG ", art))
+        .collect();
+    let ridx_size = 8 + 4 + 3 * 12;
+    let mut at = 12 + ridx_size + apal.len();
+    let mut index = 3u32.to_be_bytes().to_vec();
+
+    for (number, held) in (1u32..=3).zip(&wrapped) {
+        index.extend_from_slice(b"Pict");
+        index.extend_from_slice(&number.to_be_bytes());
+        index.extend_from_slice(&(at as u32).to_be_bytes());
+
+        at += held.len();
+    }
+
+    let mut body = b"IFRS".to_vec();
+
+    body.extend_from_slice(&chunk(b"RIdx", &index));
+    body.extend_from_slice(&apal);
+
+    for held in &wrapped {
+        body.extend_from_slice(held);
+    }
+
+    Resources::new(Some(Blorb::parse(&chunk(b"FORM", &body)).unwrap()))
+}
+
+/// A stage session fronting a Version 6 machine at its main
+/// routine (§5.4): the code inside a routine at $100, the read
+/// buffers and a tiny dictionary planted as the two-window helper
+/// plants them.
+fn staged_session(code: &[u8], resources: Option<Resources>, words: &[(usize, u16)]) -> Session {
+    let mut frontend = GlkOteFrontend::staged(6, resources).unwrap();
+
+    frontend.begin(&stage_init()).unwrap();
+
+    let mut data = vec![0u8; 512];
+
+    data[0] = 6;
+    data[0x04..0x06].copy_from_slice(&0x01C0u16.to_be_bytes());
+    data[0x06..0x08].copy_from_slice(&0x0040u16.to_be_bytes());
+    data[0x0C..0x0E].copy_from_slice(&0x0080u16.to_be_bytes());
+    data[0x0E..0x10].copy_from_slice(&0x01C0u16.to_be_bytes());
+    data[0x100] = 0x00;
+    data[0x101..0x101 + code.len()].copy_from_slice(code);
+
+    for &(offset, value) in words {
+        data[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+    }
+
+    let mut session = Session::open(Story::new(data).unwrap(), frontend, None).unwrap();
+    let memory = session.machine().memory_mut();
+
+    memory.write_byte(TEXT_BUFFER, 21).unwrap();
+    memory.write_byte(PARSE_BUFFER, 5).unwrap();
+    memory.write_word(0x08, DICTIONARY_BASE as u16).unwrap();
+
+    for (offset, value) in [2u8, b',', b'.', 0, 0, 0].into_iter().enumerate() {
+        memory.write_byte(DICTIONARY_BASE + offset, value).unwrap();
+    }
+
+    session
+}
+
+/// The canvas draw ops of an update.
+fn stage_ops(update: &Object) -> Vec<Object> {
+    let mut ops = Vec::new();
+
+    if let Some(Value::List(content)) = update.get("content") {
+        for held in content {
+            if let Value::Object(entry) = held
+                && let Some(Value::List(draw)) = entry.get("draw")
+            {
+                for op in draw {
+                    if let Value::Object(op) = op {
+                        ops.push(op.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    ops
+}
+
+// The stage opens at the art's own size: the Reso standard window
+// when the Blorb names one, MCGA's 320 by 200 without -- and a
+// display that never learned the dialect is refused at the door.
+#[test]
+fn the_stage_opens_at_the_arts_own_size() {
+    let mut bare = GlkOteFrontend::staged(6, None).unwrap();
+
+    assert!(bare.stage.is_some());
+    assert!(bare.has_colours);
+    assert!(!bare.stage.as_ref().unwrap().has_pictures);
+    assert_eq!(bare.screen_columns, 40);
+    assert_eq!(bare.screen_lines, 25);
+    assert!(bare.stage_picture_data(1).unwrap().is_none());
+
+    // A galleryless stage draws nothing, quietly.
+    bare.stage_draw_picture(1, 1, 1).unwrap();
+
+    let mut dressed = GlkOteFrontend::staged(6, Some(staged_resources())).unwrap();
+
+    dressed.begin(&stage_init()).unwrap();
+
+    assert_eq!(dressed.screen_columns, 80);
+    assert_eq!(dressed.screen_lines, 50);
+    assert!(dressed.stage.as_ref().unwrap().has_pictures);
+    assert!(dressed.has_sounds);
+
+    let refused = GlkOteFrontend::staged(6, None)
+        .unwrap()
+        .begin(&init())
+        .unwrap_err();
+
+    assert!(refused.to_string().contains("never learned the stage"));
+}
+
+// One scaled canvas carries the whole stage: the window entry
+// names the art's logical space under the display's box, the
+// opening curtain papers it, and the story's text lands as
+// placed, coalesced text ops in the §8.8 units.
+#[test]
+fn the_stage_renders_one_scaled_canvas() {
+    let mut session = staged_session(&[0xBA], None, &[]);
+    let mut face = front(&session);
+
+    face.write("Hi");
+    face.write_rectangle(&["!!".to_string()]);
+    session.machine().run().unwrap();
+
+    let update = session.render(true).unwrap();
+    let window = entry(&items(at(&update, "windows"))[0]);
+
+    assert_eq!(str_of(at(window, "type")), "graphics");
+    assert_eq!(at(window, "scaled"), &Value::Bool(true));
+    assert_eq!(int_of(at(window, "graphwidth")), 320);
+    assert_eq!(int_of(at(window, "graphheight")), 200);
+    assert_eq!(int_of(at(window, "width")), 1280);
+    assert_eq!(int_of(at(window, "height")), 800);
+
+    let ops = stage_ops(&update);
+
+    assert_eq!(
+        told(&Value::Object(ops[0].clone())),
+        r##"{"special":"setcolor","color":"#000000"}"##
+    );
+    assert_eq!(
+        told(&Value::Object(ops[1].clone())),
+        r##"{"special":"fill","x":0,"y":0,"width":320,"height":200,"color":"#000000"}"##
+    );
+    assert_eq!(
+        told(&Value::Object(ops[2].clone())),
+        r##"{"special":"text","x":0,"y":0,"text":"Hi!!","cell":[8,8],"fg":"#ffffff","bg":"#000000"}"##
+    );
+}
+
+// The dress travels resolved: colours as the shared palette's CSS,
+// reverse video pre-swapped, bold and italic as flags -- and the
+// under-cursor sample reads the painted stage, which here is the
+// opening curtain's black.
+#[test]
+fn stage_text_wears_its_dress() {
+    let mut session = staged_session(&[0xBA], None, &[]);
+    let mut face = front(&session);
+
+    face.set_style(BOLD);
+    face.write("B");
+    face.set_style(0);
+    face.set_style(ITALIC);
+    face.set_colour(3, 4);
+    face.write("i");
+    face.set_style(0);
+    face.set_style(REVERSE);
+    face.write("r");
+    face.set_style(0);
+    face.set_colour(-1, -1);
+    face.write("s");
+    session.machine().run().unwrap();
+
+    let ops = stage_ops(&session.render(true).unwrap());
+    let texts: Vec<&Object> = ops
+        .iter()
+        .filter(|op| op.get("special").and_then(Value::as_str) == Some("text"))
+        .collect();
+
+    assert_eq!(str_of(at(texts[0], "text")), "B");
+    assert_eq!(at(texts[0], "bold"), &Value::Bool(true));
+    assert_eq!(str_of(at(texts[1], "text")), "i");
+    assert_eq!(str_of(at(texts[1], "fg")), "#cc0000");
+    assert_eq!(str_of(at(texts[1], "bg")), "#00cc00");
+    assert_eq!(at(texts[1], "italic"), &Value::Bool(true));
+    assert_eq!(str_of(at(texts[2], "text")), "r");
+    assert_eq!(str_of(at(texts[2], "fg")), "#00cc00");
+    assert_eq!(str_of(at(texts[2], "bg")), "#cc0000");
+    assert_eq!(str_of(at(texts[3], "text")), "s");
+    assert_eq!(str_of(at(texts[3], "fg")), "#000000");
+    assert_eq!(str_of(at(texts[3], "bg")), "#000000");
+}
+
+// The eight-window geometry lands where the game placed it: a
+// placed window's text paints at its absolute units, the scroll
+// slides as a shift op, and the pixel-width erase-line fills.
+#[test]
+fn the_stage_forwards_the_eight_window_ops() {
+    let mut session = staged_session(&[0xBA], None, &[]);
+    let mut face = front(&session);
+
+    face.place_window(2, 41, 17, 64, 128);
+    face.set_window(2);
+    face.set_cursor(1, 1);
+    face.set_font(4);
+    face.set_buffering(false);
+    face.write("W");
+    face.erase_line(Some(16));
+    face.scroll_window(2, 8);
+    face.set_margins(2, 0, 0);
+    face.set_line_count(2, -999);
+    face.split_window(0);
+    session.machine().run().unwrap();
+
+    assert_eq!(face.cursor_position(), (1, 9));
+
+    // A single window's erasure homes it and keeps any chrome.
+    face.erase_window(2);
+
+    let ops = stage_ops(&session.render(true).unwrap());
+    let placed = ops
+        .iter()
+        .find(|op| op.get("special").and_then(Value::as_str) == Some("text"))
+        .unwrap();
+    let shift = ops
+        .iter()
+        .find(|op| op.get("special").and_then(Value::as_str) == Some("shift"))
+        .unwrap();
+    let fill_widths: Vec<i64> = ops
+        .iter()
+        .filter(|op| op.get("special").and_then(Value::as_str) == Some("fill"))
+        .map(|op| int_of(at(op, "width")))
+        .collect();
+
+    assert_eq!(str_of(at(placed, "text")), "W");
+    assert_eq!(int_of(at(placed, "x")), 16);
+    assert_eq!(int_of(at(placed, "y")), 40);
+    assert_eq!(int_of(at(shift, "rise")), 8);
+    assert!(fill_widths.contains(&16));
+
+    // §8.2 has no line on a stage; the fault surfaces at render.
+    face.show_status(&Status {
+        location: "Here".to_string(),
+        score: 0,
+        turns: 0,
+        time_game: false,
+    });
+
+    assert!(
+        session
+            .render(false)
+            .unwrap_err()
+            .to_string()
+            .contains("no line")
+    );
+}
+
+// The pictures draw Reso-scaled at their unit positions, in the
+// turn's true order against the flowing text; a Rect placard has
+// a size for layout but no bytes, and an unknown number draws and
+// erases nothing at all.
+#[test]
+fn the_stage_draws_its_pictures() {
+    let mut session = staged_session(&[0xBA], Some(staged_resources()), &[]);
+    let mut face = front(&session);
+
+    assert_eq!(face.picture_census(), (2, 9));
+    assert_eq!(face.picture_data(1), Some((2, 4)));
+    assert_eq!(face.picture_data(2), Some((16, 24)));
+    assert_eq!(face.picture_data(7), None);
+
+    face.write("A");
+    face.draw_picture(1, 11, 21);
+    face.write("B");
+    face.draw_picture(2, 1, 1);
+    face.draw_picture(7, 1, 1);
+    face.erase_picture(1, 11, 21);
+    face.erase_picture(7, 1, 1);
+    session.machine().run().unwrap();
+
+    let ops = stage_ops(&session.render(true).unwrap());
+    let kinds: Vec<&str> = ops
+        .iter()
+        .filter_map(|op| op.get("special").and_then(Value::as_str))
+        .filter(|kind| *kind != "setcolor")
+        .collect();
+    let image = ops
+        .iter()
+        .find(|op| op.get("special").and_then(Value::as_str) == Some("image"))
+        .unwrap();
+    let papered = ops.last().unwrap();
+
+    assert_eq!(kinds, vec!["fill", "text", "image", "text", "fill"]);
+    assert_eq!(int_of(at(image, "image")), 1);
+    assert!(str_of(at(image, "url")).starts_with("data:image/png;base64,"));
+    assert_eq!(int_of(at(image, "x")), 20);
+    assert_eq!(int_of(at(image, "y")), 10);
+    assert_eq!(int_of(at(image, "width")), 4);
+    assert_eq!(int_of(at(image, "height")), 2);
+    assert_eq!(int_of(at(papered, "width")), 4);
+    assert_eq!(int_of(at(papered, "height")), 2);
+}
+
+// A line read asks at the stage's own cursor with the editor's
+// cell, the table's nameable terminators offered and the click
+// armed when the table names it -- and the landed line echoes
+// onto the stage, though a terminator-ended one stays uncommitted.
+#[test]
+fn the_stage_asks_and_echoes_the_line() {
+    let mut session = staged_session(AREAD, None, &[(0x2E, 0x01A0)]);
+
+    session
+        .machine()
+        .memory_mut()
+        .write_byte(0x01A0, 133)
+        .unwrap();
+    session
+        .machine()
+        .memory_mut()
+        .write_byte(0x01A1, 254)
+        .unwrap();
+    front(&session).write("> ");
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let asked = entry(&items(at(&update, "input"))[0]);
+
+    assert_eq!(str_of(at(asked, "type")), "line");
+    assert_eq!(int_of(at(asked, "maxlen")), 21);
+    assert_eq!(int_of(at(asked, "xpos")), 16);
+    assert_eq!(int_of(at(asked, "ypos")), 0);
+    assert_eq!(told(at(asked, "cell")), "[8,8]");
+    assert_eq!(str_of(at(asked, "ink")), "#ffffff");
+    assert_eq!(told(at(asked, "terminators")), r#"["func1"]"#);
+    assert_eq!(at(asked, "mouse"), &Value::Bool(true));
+
+    let generation = int_of(at(&update, "gen"));
+    let verdict = session
+        .accept(&parsed(&format!(
+            r#"{{"type":"line","gen":{generation},"value":"go"}}"#
+        )))
+        .unwrap();
+
+    assert_eq!(verdict, Verdict::Advance);
+
+    session.machine().run().unwrap();
+
+    let echoed = stage_ops(&session.render(true).unwrap())
+        .into_iter()
+        .find(|op| op.get("special").and_then(Value::as_str) == Some("text"))
+        .unwrap();
+
+    assert_eq!(str_of(at(&echoed, "text")), "go");
+    assert_eq!(int_of(at(&echoed, "x")), 16);
+
+    let mut quiet = staged_session(AREAD, None, &[(0x2E, 0x01A0)]);
+
+    quiet
+        .machine()
+        .memory_mut()
+        .write_byte(0x01A0, 133)
+        .unwrap();
+    quiet.machine().run().unwrap();
+
+    let asked = quiet.render(false).unwrap();
+    let generation = int_of(at(&asked, "gen"));
+
+    quiet
+        .accept(&parsed(&format!(
+            r#"{{"type":"line","gen":{generation},"value":"held","terminator":"func1"}}"#
+        )))
+        .unwrap();
+    quiet.machine().run().unwrap();
+
+    let silent = stage_ops(&quiet.render(true).unwrap());
+
+    assert!(
+        !silent
+            .iter()
+            .any(|op| op.get("special").and_then(Value::as_str) == Some("text"))
+    );
+}
+
+// A keystroke read is an invisible focus target that hears clicks
+// the way it hears any key: the canvas's own click lands as the
+// §10.3 single-click code, one unit step over, while a click on
+// some other window -- or before any canvas stands -- passes.
+#[test]
+fn the_stage_hears_keys_and_clicks() {
+    let mut unborn = staged_session(READ_CHAR, None, &[]);
+
+    assert_eq!(
+        unborn
+            .accept(&parsed(
+                r#"{"type":"mouse","gen":0,"window":9,"x":1,"y":1}"#
+            ))
+            .unwrap(),
+        Verdict::Pass
+    );
+
+    let mut session = staged_session(READ_CHAR, None, &[]);
+
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let canvas = int_of(at(entry(&items(at(&update, "windows"))[0]), "id"));
+
+    assert_eq!(
+        told(at(&update, "input")),
+        format!(r#"[{{"id":{canvas},"type":"char","mouse":true,"gen":1}}]"#)
+    );
+
+    let astray = parsed(&format!(
+        r#"{{"type":"mouse","gen":1,"window":{},"x":1,"y":1}}"#,
+        canvas + 9
+    ));
+
+    assert_eq!(session.accept(&astray).unwrap(), Verdict::Pass);
+
+    let landed = parsed(&format!(
+        r#"{{"type":"mouse","gen":1,"window":{canvas},"x":9,"y":15}}"#
+    ));
+
+    assert_eq!(session.accept(&landed).unwrap(), Verdict::Advance);
+
+    session.machine().run().unwrap();
+
+    assert_eq!(session.machine().memory_mut().read_word(0x80).unwrap(), 254);
+}
+
+// An arrange re-boxes the canvas without the machine hearing a
+// word -- the units never move -- and a redraw replays the
+// journal: everything since the last whole-stage fill, the scene
+// papered first, the pre-scene paints gone for good. A refresh
+// replays it with the windows resent.
+#[test]
+fn the_stage_reshapes_and_replays() {
+    let mut session = staged_session(READ_CHAR, None, &[]);
+
+    front(&session).write("old");
+    session.machine().run().unwrap();
+    session.render(false).unwrap();
+
+    front(&session).erase_window(-1);
+    front(&session).write("new");
+
+    let second = session.render(false).unwrap();
+
+    assert_eq!(
+        stage_ops(&second)[0].get("special").and_then(Value::as_str),
+        Some("fill")
+    );
+
+    let generation = int_of(at(&second, "gen"));
+    let reboxed = parsed(&format!(
+        r#"{{"type":"arrange","gen":{generation},"metrics":{{"width":640,"height":400}}}}"#
+    ));
+
+    assert_eq!(session.accept(&reboxed).unwrap(), Verdict::Stand);
+
+    let resized = session.render(false).unwrap();
+    let window = entry(&items(at(&resized, "windows"))[0]);
+
+    assert_eq!(int_of(at(window, "width")), 640);
+    assert_eq!(int_of(at(window, "graphwidth")), 320);
+
+    let generation = int_of(at(&resized, "gen"));
+    let redraw = parsed(&format!(
+        r#"{{"type":"redraw","gen":{generation},"window":2}}"#
+    ));
+
+    assert_eq!(session.accept(&redraw).unwrap(), Verdict::Stand);
+
+    let replayed = stage_ops(&session.render(false).unwrap());
+    let texts: Vec<&str> = replayed
+        .iter()
+        .filter_map(|op| op.get("text").and_then(Value::as_str))
+        .collect();
+
+    assert_eq!(
+        replayed[0].get("special").and_then(Value::as_str),
+        Some("setcolor")
+    );
+    assert!(!texts.contains(&"old"));
+    assert!(texts.contains(&"new"));
+
+    assert_eq!(
+        session.accept(&parsed(r#"{"type":"refresh"}"#)).unwrap(),
+        Verdict::Stand
+    );
+
+    let told_whole = session.render(false).unwrap();
+
+    assert!(told_whole.get("windows").is_some());
+    assert!(
+        stage_ops(&told_whole)
+            .iter()
+            .filter_map(|op| op.get("text").and_then(Value::as_str))
+            .any(|text| text == "new")
+    );
+}
+
+// The guards hold at the pointers on the stage too: a click with
+// only a file ask standing passes at the canvas.
+#[test]
+fn misaimed_stage_clicks_pass() {
+    let mut session = staged_session(SAVED, None, &[]);
+
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let canvas = int_of(at(entry(&items(at(&update, "windows"))[0]), "id"));
+    let generation = int_of(at(&update, "gen"));
+    let tapped = parsed(&format!(
+        r#"{{"type":"mouse","gen":{generation},"window":{canvas},"x":1,"y":1}}"#
+    ));
+
+    assert_eq!(session.accept(&tapped).unwrap(), Verdict::Pass);
+}
+
+// The chrome wears the scene: a scene's plot absorbs its palette
+// and the standing chrome re-plots in the Current Palette -- new
+// bytes at the same position, the wire's spelling of Infocom's
+// hardware recolouring -- while encodings are remembered per
+// palette era and a whole-screen erasure takes the chrome along.
+#[test]
+fn the_stage_chrome_wears_the_scene() {
+    let mut session = staged_session(READ_CHAR, Some(adaptive_resources()), &[]);
+    let mut face = front(&session);
+
+    face.draw_picture(1, 1, 1);
+    face.draw_picture(2, 1, 9);
+    face.draw_picture(2, 1, 9);
+    face.draw_picture(3, 9, 1);
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+    let images: Vec<Object> = stage_ops(&update)
+        .into_iter()
+        .filter(|op| op.get("special").and_then(Value::as_str) == Some("image"))
+        .collect();
+    let numbers: Vec<i64> = images.iter().map(|op| int_of(at(op, "image"))).collect();
+
+    assert_eq!(numbers, vec![1, 2, 2, 3, 2]);
+    assert_eq!(str_of(at(&images[1], "url")), str_of(at(&images[2], "url")));
+    assert_ne!(str_of(at(&images[4], "url")), str_of(at(&images[1], "url")));
+    assert_eq!(int_of(at(&images[4], "x")), 8);
+    assert_eq!(int_of(at(&images[4], "y")), 0);
+
+    face.erase_window(-1);
+    face.draw_picture(1, 1, 1);
+
+    let numbers: Vec<i64> = stage_ops(&session.render(false).unwrap())
+        .into_iter()
+        .filter(|op| op.get("special").and_then(Value::as_str) == Some("image"))
+        .map(|op| int_of(at(&op, "image")))
+        .collect();
+
+    assert_eq!(numbers, vec![1]);
+}
+
+// §8.3.1's under-cursor sample reads the painted stage itself:
+// over a plotted picture the art's own pixel answers, a chrome's
+// transparent hole deferring to the scene beneath, and the minted
+// colour dresses the following text -- how Zork Zero's status
+// text sits on its ribbons without a seam. One colour mints once.
+#[test]
+fn the_stage_samples_its_own_paint() {
+    let mut session = staged_session(READ_CHAR, Some(adaptive_resources()), &[]);
+    let mut face = front(&session);
+
+    face.draw_picture(1, 9, 17);
+    face.draw_picture(2, 9, 17);
+    face.set_cursor(9, 17);
+    face.set_colour(-1, -1);
+    face.write("s");
+    face.set_cursor(9, 17);
+    face.set_colour(-1, -1);
+    face.write("t");
+    session.machine().run().unwrap();
+
+    let sampled: Vec<Object> = stage_ops(&session.render(false).unwrap())
+        .into_iter()
+        .filter(|op| {
+            matches!(
+                op.get("text").and_then(Value::as_str),
+                Some("s") | Some("t")
+            )
+        })
+        .collect();
+
+    assert_eq!(sampled.len(), 2);
+
+    for held in &sampled {
+        assert_eq!(str_of(at(held, "fg")), "#c80000");
+        assert_eq!(str_of(at(held, "bg")), "#c80000");
+    }
+}
+
+// The point sample walks the paint newest-first: a fill answers
+// its colour inside its rectangle and defers outside it, an image
+// without a gallery -- or naming art the gallery cannot decode --
+// is passed over, and paint never laid answers the default paper.
+#[test]
+fn plotted_answers_the_top_paint() {
+    let fill = parsed(r##"{"special":"fill","x":0,"y":0,"width":4,"height":4,"color":"#123456"}"##);
+    let dye = parsed(r##"{"special":"setcolor","color":"#ffffff"}"##);
+    let astray = parsed(r#"{"special":"image","image":9,"x":0,"y":0,"width":4,"height":4}"#);
+
+    assert_eq!(plotted(&[], &[], 0, 0, None).unwrap(), "#000000");
+    assert_eq!(
+        plotted(&[], &[fill.clone(), dye], 1, 1, None).unwrap(),
+        "#123456"
+    );
+    assert_eq!(
+        plotted(&[], std::slice::from_ref(&fill), 9, 9, None).unwrap(),
+        "#000000"
+    );
+    assert_eq!(
+        plotted(&[], &[fill.clone(), astray.clone()], 1, 1, None).unwrap(),
+        "#123456"
+    );
+
+    let mut gallery = Gallery::new(
+        std::collections::BTreeMap::new(),
+        0,
+        None,
+        std::collections::HashSet::new(),
+        HashMap::new(),
+    );
+
+    assert_eq!(
+        plotted(&[], &[fill, astray], 1, 1, Some(&mut gallery)).unwrap(),
+        "#123456"
+    );
+}
+
+// A save asks for its file through the protocol's special input, a
+// restore asks to read -- and the cancel is delivered like any
+// player answer.
+#[test]
+fn the_stage_asks_for_its_file() {
+    let mut session = staged_session(SAVED, None, &[]);
+
+    session.machine().run().unwrap();
+
+    let update = session.render(false).unwrap();
+
+    assert_eq!(
+        told(at(&update, "specialinput")),
+        r#"{"type":"fileref_prompt","filemode":"write","filetype":"save"}"#
+    );
+
+    let generation = int_of(at(&update, "gen"));
+    let verdict = session
+        .accept(&parsed(&format!(
+            r#"{{"type":"specialresponse","gen":{generation},"response":"fileref_prompt"}}"#
+        )))
+        .unwrap();
+
+    assert_eq!(verdict, Verdict::Advance);
+
+    let mut reader = staged_session(RESTORED, None, &[]);
+
+    reader.machine().run().unwrap();
+
+    let asked = reader.render(false).unwrap();
+
+    assert_eq!(
+        str_of(at(entry(at(&asked, "specialinput")), "filemode")),
+        "read"
     );
 }

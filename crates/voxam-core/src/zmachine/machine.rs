@@ -290,6 +290,10 @@ pub struct Machine {
     /// Whether the story window (window 0) is selected: the only
     /// window whose text belongs in a transcript (§7.1.1).
     story_window: bool,
+    // Cursor moves aimed at unselected stage windows: the move
+    // reaches the stage when that window is next selected
+    // (§8.8.3.5) -- until then the ledger holds it alone.
+    aimed: std::collections::HashSet<u16>,
     font: u16,
     recording_commands: bool,
     file_input: bool,
@@ -332,6 +336,14 @@ impl Machine {
         let objects = ObjectTable::new(&memory);
         let frontend_lines = frontend.screen_lines();
         let frontend_columns = frontend.screen_columns();
+        // The ledger's numbers are units: real pixels on a
+        // measuring Version 6 glass, characters everywhere else
+        // (§8.4.2, §8.8.1).
+        let (font_width, font_height) = if memory.header().version() == 6 {
+            (frontend.font_width(), frontend.font_height())
+        } else {
+            (1, 1)
+        };
 
         let mut machine = Self {
             story,
@@ -350,13 +362,14 @@ impl Machine {
             font: NORMAL_FONT,
             recording_commands: false,
             file_input: false,
+            aimed: std::collections::HashSet::new(),
             windows: WindowLedger::new(
-                u16::from(frontend_lines),
-                u16::from(frontend_columns),
+                u16::from(frontend_lines) * font_height,
+                u16::from(frontend_columns) * font_width,
                 u16::from(DEFAULT_FOREGROUND_COLOUR),
                 u16::from(DEFAULT_BACKGROUND_COLOUR),
-                1,
-                1,
+                font_width,
+                font_height,
             ),
             screen_buffering: 0,
             redirections: Vec::new(),
@@ -395,6 +408,21 @@ impl Machine {
         Ok(())
     }
 
+    /// One character cell's width and height, in units. Version 6
+    /// alone measures its screen in real pixels (§8.8.1), so only
+    /// there do the frontend's font metrics become the story's
+    /// units; every other version keeps one unit per character
+    /// (§8.4.2): Beyond Zork lays out its windows by mixing unit
+    /// arithmetic with character-cell set_cursor moves, which only
+    /// agrees when the two scales are the same scale.
+    fn unit_metrics(&self) -> (u16, u16) {
+        if self.memory.header().version() == 6 {
+            (self.frontend.font_width(), self.frontend.font_height())
+        } else {
+            (1, 1)
+        }
+    }
+
     /// Stamp the frontend's honest capabilities into the header
     /// (§11.1): the Rst fields, set at boot and reset after every
     /// restore and restart (§6.1.2.2).
@@ -425,12 +453,14 @@ impl Machine {
             )?;
 
             if version >= 5 {
+                let (font_width, font_height) = self.unit_metrics();
+
                 declare::screen_units(
                     &mut self.memory,
-                    u16::from(self.frontend.screen_columns()),
-                    u16::from(self.frontend.screen_lines()),
+                    u16::from(self.frontend.screen_columns()) * font_width,
+                    u16::from(self.frontend.screen_lines()) * font_height,
                 )?;
-                declare::font_size(&mut self.memory, 1, 1)?;
+                declare::font_size(&mut self.memory, font_width as u8, font_height as u8)?;
                 declare::colours(
                     &mut self.memory,
                     self.frontend.has_colours(),
@@ -1966,21 +1996,28 @@ impl Machine {
     /// (§15 output_stream): zero or positive names a window whose
     /// current width in units is the limit, negative means a box
     /// of -width units; no width -- or any version but 6 -- is the
-    /// flat, unformatted table.
+    /// flat, unformatted table. The wrap arithmetic counts
+    /// characters, so the unit width divides by the font width: on
+    /// the 1-by-1 character glasses the numbers are the same,
+    /// while a measuring glass turns 720 pixels back into 80
+    /// characters.
     fn redirection_limit(&self, values: &[u16]) -> Result<Option<usize>, VoxamError> {
         if values.len() <= 2 || self.memory.header().version() != 6 {
             return Ok(None);
         }
 
+        let (font_width, _) = self.unit_metrics();
         let width = signed(values[2]);
 
         if width < 0 {
-            return Ok(Some(((-width) as usize).max(1)));
+            return Ok(Some(((-width) / i32::from(font_width)).max(1) as usize));
         }
 
         let window_width = self.windows.property(width, X_SIZE)?;
 
-        Ok(Some(usize::from(window_width).max(1)))
+        Ok(Some(
+            (usize::from(window_width) / usize::from(font_width)).max(1),
+        ))
     }
 
     /// Close the newest stream 3 table, writing its count
@@ -2018,8 +2055,11 @@ impl Machine {
 
         if self.memory.header().version() == 6 {
             // The $30 word is "total width in pixels" (§11's
-            // table) -- characters times the 1-by-1 font width.
-            self.memory.write_word(0x30, widest as u16)?;
+            // table) -- characters times the font width, real
+            // pixels on a measuring glass (§8.8.1).
+            let (font_width, _) = self.unit_metrics();
+
+            self.memory.write_word(0x30, widest as u16 * font_width)?;
         }
 
         Ok(())
@@ -2291,14 +2331,18 @@ impl Machine {
         self.frontend.set_font(NORMAL_FONT);
 
         // The §8.8 window ledger returns to its boot state with
-        // the rest of the interpreter's own memory.
+        // the rest of the interpreter's own memory, aimed cursors
+        // included.
+        let (font_width, font_height) = self.unit_metrics();
+
+        self.aimed.clear();
         self.windows = WindowLedger::new(
-            u16::from(self.frontend.screen_lines()),
-            u16::from(self.frontend.screen_columns()),
+            u16::from(self.frontend.screen_lines()) * font_height,
+            u16::from(self.frontend.screen_columns()) * font_width,
             u16::from(DEFAULT_FOREGROUND_COLOUR),
             u16::from(DEFAULT_BACKGROUND_COLOUR),
-            1,
-            1,
+            font_width,
+            font_height,
         );
 
         self.declare_capabilities()?;
@@ -2363,9 +2407,8 @@ impl Machine {
                 let target = self.windows.resolve(window)?;
 
                 // A character glass renders only windows 0 and 1;
-                // erasing one it never painted is already true
-                // (§8.8.3).
-                if target > 1 {
+                // a stage erases any of the eight (§8.8.5.3).
+                if !self.frontend.has_stage() && target > 1 {
                     self.pc = instruction.next_address;
 
                     return Ok(());
@@ -2391,13 +2434,18 @@ impl Machine {
     }
 
     /// Erase rightward from the cursor (§15 erase_line): value 1
-    /// erases to the end of the line; any other value does nothing
-    /// before Version 6.
+    /// erases to the end of the line in every version that has the
+    /// opcode. Any other value does nothing before Version 6; in
+    /// Version 6 it instead erases the value minus one pixels
+    /// rightward, clipped to stay inside the right margin
+    /// (§8.8.5.2).
     fn op_erase_line(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let value = self.value(&instruction.operands[0])?;
 
         if value == ERASE_TO_END {
-            self.frontend.erase_line();
+            self.frontend.erase_line(None);
+        } else if self.memory.header().version() == 6 {
+            self.frontend.erase_line(Some(i32::from(value) - 1));
         }
 
         self.pc = instruction.next_address;
@@ -2423,7 +2471,8 @@ impl Machine {
             // Tile ledger windows 1 and 0 vertically (§8.8.4.1):
             // window 1 takes the top at the given height in units
             // and window 0 the rest; widths stay put.
-            let screen_height = u16::from(self.frontend.screen_lines());
+            let (_, font_height) = self.unit_metrics();
+            let screen_height = u16::from(self.frontend.screen_lines()) * font_height;
 
             self.windows.write_property(1, windows::Y_COORDINATE, 1)?;
             self.windows.write_property(1, windows::Y_SIZE, height)?;
@@ -2454,7 +2503,22 @@ impl Machine {
             self.windows.selected = selected;
             self.story_window = selected == 0;
 
-            if selected <= 1 {
+            if self.frontend.has_stage() {
+                // The stage hears every selection. A cursor the
+                // game aimed at this window while it was unselected
+                // rides along now; otherwise the window's own
+                // remembered cursor stands (§8.8.3.5) -- the stage
+                // tracks it through printing, which the ledger's
+                // stale copy does not.
+                self.frontend.set_window(selected);
+
+                if self.aimed.remove(&selected) {
+                    let line = self.windows.property(i32::from(selected), Y_CURSOR)?;
+                    let column = self.windows.property(i32::from(selected), X_CURSOR)?;
+
+                    self.frontend.set_cursor(line, column);
+                }
+            } else if selected <= 1 {
                 self.frontend.set_window(selected);
             }
         } else {
@@ -2491,6 +2555,17 @@ impl Machine {
                     .write_property(i32::from(target), Y_CURSOR, line)?;
                 self.windows
                     .write_property(i32::from(target), X_CURSOR, column)?;
+
+                if self.frontend.has_stage() {
+                    if target == self.windows.selected {
+                        self.frontend.set_cursor(line, column);
+                    } else {
+                        // Aimed at an unselected window: the move
+                        // reaches the stage when that window is
+                        // next selected.
+                        self.aimed.insert(target);
+                    }
+                }
             }
         } else {
             let line = self.value(&instruction.operands[0])?;
@@ -2510,14 +2585,24 @@ impl Machine {
     fn op_get_cursor(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let array = usize::from(self.value(&instruction.operands[0])?);
 
-        // A character glass reads the current window's cursor from
-        // the §8.8 ledger in Version 6 -- the same place its
-        // set_cursor writes, so the round trip is exact.
         let (row, column) = if self.memory.header().version() == 6 {
-            (
-                self.windows.property(CURRENT_WINDOW, Y_CURSOR)?,
-                self.windows.property(CURRENT_WINDOW, X_CURSOR)?,
-            )
+            if self.frontend.has_stage() {
+                // The stage's cursor is the printing truth: text
+                // flow moves it, which the ledger's copy never
+                // sees. PunyInform saves the cursor here before
+                // redrawing its status line and restores it after
+                // -- a stale answer reprints a whole line.
+                self.frontend.cursor_position()
+            } else {
+                // A character glass reads the current window's
+                // cursor from the §8.8 ledger -- the same place
+                // its set_cursor writes, so the round trip is
+                // exact.
+                (
+                    self.windows.property(CURRENT_WINDOW, Y_CURSOR)?,
+                    self.windows.property(CURRENT_WINDOW, X_CURSOR)?,
+                )
+            }
         } else {
             self.frontend.cursor_position()
         };
@@ -2742,9 +2827,25 @@ impl Machine {
     }
 
     /// Store one §8.8.3.2 window property (§15 get_wind_prop).
+    ///
+    /// On a stage, the selected window's cursor properties answer
+    /// from the frontend's flowed cursor: printing moves it, and
+    /// the ledger's copy cannot know (§8.8.3.5). Shogun centres
+    /// each title line by reading property 4 back between prints
+    /// -- against the stale copy, every line lands on the first
+    /// one's row.
     fn op_get_wind_prop(&mut self, instruction: &Instruction) -> Result<(), VoxamError> {
         let values = self.values(instruction)?;
-        let value = self.windows.property(i32::from(values[0]), values[1])?;
+        let mut value = self.windows.property(i32::from(values[0]), values[1])?;
+
+        if self.frontend.has_stage()
+            && (values[1] == Y_CURSOR || values[1] == X_CURSOR)
+            && self.windows.resolve(i32::from(values[0]))? == self.windows.selected
+        {
+            let (line, column) = self.frontend.cursor_position();
+
+            value = if values[1] == Y_CURSOR { line } else { column };
+        }
 
         self.store_result(instruction.store_variable, value)?;
         self.pc = instruction.next_address;
