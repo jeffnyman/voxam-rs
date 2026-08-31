@@ -139,9 +139,103 @@ function paned(panes) {
   document.body.classList.toggle("pane-notes", !!panes.notes);
   document.body.classList.toggle("paned", !!(panes.map || panes.notes));
 
-  window.dispatchEvent(new Event("resize"));
+  if (typeof panes.width === "number") laid.width = panes.width;
+  if (typeof panes.split === "number") laid.split = panes.split;
+
+  laidOut();
 
   if (panes.map) drawMap();
+}
+
+/* The pane column's shape: how wide it stands, and how the two
+   panes divide it. Dragged live, kept when the hand comes off. */
+var PANE_WIDTH = 340;
+var PANE_SPLIT = 0.5;
+/* The story keeps at least this much room whatever the drag
+   wants, so a pane can never swallow the prose entirely. */
+var STORY_LEAST = 360;
+var PANE_NARROWEST = 220;
+var SPLIT_LEAST = 0.15;
+var SPLIT_MOST = 0.85;
+
+var laid = { width: PANE_WIDTH, split: PANE_SPLIT };
+
+function clamped(value, least, most) {
+  return Math.min(Math.max(value, least), most);
+}
+
+/* The width a pointer at `at` asks for, in a window `across`
+   wide. The widest is held above the narrowest as well as below
+   the story's own claim, since on a window too small to satisfy
+   both, a pane that cannot be read is the worse failure. */
+function widthFor(at, across) {
+  var widest = Math.max(PANE_NARROWEST, across - STORY_LEAST);
+
+  return clamped(across - at, PANE_NARROWEST, widest);
+}
+
+/* The share of the column a pointer at `at` asks for, given the
+   column's own top and height. */
+function splitFor(at, top, height) {
+  if (!(height > 0)) return laid.split;
+
+  return clamped((at - top) / height, SPLIT_LEAST, SPLIT_MOST);
+}
+
+/* Wear the layout, and let GlkOte re-measure the column it left.
+   Its own resize handler waits out a flurry before acting, so
+   firing this on every pointer move costs one relayout, not one
+   per pixel. */
+function laidOut() {
+  var root = document.documentElement.style;
+
+  root.setProperty("--pane", laid.width + "px");
+  root.setProperty("--split", (laid.split * 100).toFixed(3) + "%");
+
+  window.dispatchEvent(new Event("resize"));
+}
+
+function layoutKept() {
+  invoke("set_pane_layout", { width: Math.round(laid.width), split: laid.split })
+    .catch(function() {});
+}
+
+/* One grip, dragged: `move` is handed each pointer position and
+   answers the new layout; the rest -- capture, the dragging
+   dress, keeping what was chosen, and the double-click reset --
+   is the same for both. */
+function grip(id, move, reset) {
+  var handle = document.getElementById(id);
+
+  handle.addEventListener("pointerdown", function(event) {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("dragging");
+
+    function dragged(moved) {
+      move(moved);
+      laidOut();
+    }
+
+    function dropped(ended) {
+      handle.releasePointerCapture(ended.pointerId);
+      handle.removeEventListener("pointermove", dragged);
+      handle.removeEventListener("pointerup", dropped);
+      handle.removeEventListener("pointercancel", dropped);
+      document.body.classList.remove("dragging");
+      layoutKept();
+    }
+
+    handle.addEventListener("pointermove", dragged);
+    handle.addEventListener("pointerup", dropped);
+    handle.addEventListener("pointercancel", dropped);
+  });
+
+  handle.addEventListener("dblclick", function() {
+    reset();
+    laidOut();
+    layoutKept();
+  });
 }
 
 /* Notes are saved a breath after typing stops rather than on
@@ -247,6 +341,25 @@ window.addEventListener("DOMContentLoaded", function() {
   /* A window closing, or a page reloading into a new story, must
      not take the last sentence with it. */
   window.addEventListener("beforeunload", noteSettled);
+
+  /* The column's edge: dragged left widens the panes, and the
+     story keeps a readable measure whatever the hand asks. */
+  grip("panegrip", function(event) {
+    laid.width = widthFor(event.clientX, window.innerWidth);
+  }, function() {
+    laid.width = PANE_WIDTH;
+  });
+
+  /* The division between the two panes, as a share of the column
+     rather than a pixel count, so it holds its proportion when
+     the window is resized. */
+  grip("splitgrip", function(event) {
+    var box = document.getElementById("panes").getBoundingClientRect();
+
+    laid.split = splitFor(event.clientY, box.top, box.height);
+  }, function() {
+    laid.split = PANE_SPLIT;
+  });
 
   listen("menu-open", chooseStory);
   listen("menu-restart", function() {

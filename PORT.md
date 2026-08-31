@@ -364,6 +364,21 @@ cannot name keeps its notes for the session only, since writing
 them under no name would file one story's notes where another's
 belong.
 
+Both panes share one column, and both dividers are draggable --
+the column's own edge, and the line between the panes when both
+stand open. Two rules keep a drag from making a window nobody
+can use: the story always keeps a readable measure however far
+the panes are pulled, and on a window too small to grant both,
+the pane stays readable rather than collapsing below its own
+minimum. The width is a pixel count and the division a share, so
+the panes hold their proportion when the window itself is
+resized. Both are clamped again on the Rust side when read, since
+a settings file edited by hand should not be able to wedge the
+window into a shape with no way back; the arithmetic on each side
+has its own drills. Dragging is live -- GlkOte waits out a flurry
+of resizes before re-laying anything, so a drag costs one relayout
+rather than one per pixel.
+
 ## Departures the port has recorded
 
 Each is a documented translation, never a behaviour change; the

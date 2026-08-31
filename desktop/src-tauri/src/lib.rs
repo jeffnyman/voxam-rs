@@ -22,6 +22,9 @@
 pub mod map;
 pub mod sidecar;
 
+#[cfg(test)]
+mod tests;
+
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -174,13 +177,70 @@ impl Display {
     }
 }
 
-/// Which side panes stand open. Persisted as panes.json beside
-/// the display settings, so the window opens as it was left.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+/// How wide the pane column stands, and how it is divided, by
+/// default: half the column each, in a column wide enough for a
+/// small map and a paragraph of notes.
+const PANE_WIDTH: u32 = 340;
+const PANE_SPLIT: f64 = 0.5;
+
+/// The bounds a dragged layout is held to, whatever a settings
+/// file says: a pane too narrow to read, or a story column
+/// squeezed to nothing, is not a layout anybody chose on purpose.
+const PANE_NARROWEST: u32 = 220;
+const PANE_WIDEST: u32 = 1200;
+const SPLIT_LEAST: f64 = 0.15;
+const SPLIT_MOST: f64 = 0.85;
+
+/// Which side panes stand open, how wide they stand, and where
+/// they divide. Persisted as panes.json beside the display
+/// settings, so the window opens as it was left.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Panes {
     map: bool,
     #[serde(default)]
     notes: bool,
+    /// The column's width in pixels.
+    #[serde(default = "pane_width")]
+    width: u32,
+    /// The share of the column the map takes when both panes
+    /// stand open; the notes take the rest.
+    #[serde(default = "pane_split")]
+    split: f64,
+}
+
+fn pane_width() -> u32 {
+    PANE_WIDTH
+}
+
+fn pane_split() -> f64 {
+    PANE_SPLIT
+}
+
+impl Default for Panes {
+    fn default() -> Self {
+        Self {
+            map: false,
+            notes: false,
+            width: PANE_WIDTH,
+            split: PANE_SPLIT,
+        }
+    }
+}
+
+impl Panes {
+    /// The layout as it can actually be worn. A settings file
+    /// edited by hand, or left by some future version, never gets
+    /// to wedge the window into a shape with no way back.
+    fn held(mut self) -> Self {
+        self.width = self.width.clamp(PANE_NARROWEST, PANE_WIDEST);
+        self.split = if self.split.is_finite() {
+            self.split.clamp(SPLIT_LEAST, SPLIT_MOST)
+        } else {
+            PANE_SPLIT
+        };
+
+        self
+    }
 }
 
 fn panes_path(app: &AppHandle) -> Option<PathBuf> {
@@ -193,8 +253,9 @@ fn panes_path(app: &AppHandle) -> Option<PathBuf> {
 fn load_panes(app: &AppHandle) -> Panes {
     panes_path(app)
         .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|held| serde_json::from_str(&held).ok())
+        .and_then(|held| serde_json::from_str::<Panes>(&held).ok())
         .unwrap_or_default()
+        .held()
 }
 
 fn save_panes(app: &AppHandle, panes: &Panes) {
@@ -821,6 +882,31 @@ async fn open_panes(state: State<'_, Shell>) -> Result<Panes, String> {
     Ok(state.panes.lock().unwrap().clone())
 }
 
+/// Keep a dragged layout: the column's width, and where it
+/// divides. The page drags live and tells us when the hand comes
+/// off, so a drag writes one file rather than one per pixel.
+#[tauri::command]
+async fn set_pane_layout(
+    app: AppHandle,
+    state: State<'_, Shell>,
+    width: u32,
+    split: f64,
+) -> Result<(), String> {
+    let mut panes = state.panes.lock().unwrap();
+
+    panes.width = width;
+    panes.split = split;
+
+    let standing = panes.clone().held();
+
+    *panes = standing.clone();
+
+    drop(panes);
+    save_panes(&app, &standing);
+
+    Ok(())
+}
+
 /// Where the player stands, as the wire last reported it.
 ///
 /// The panes ask this; a session that grants no sidecar, or one
@@ -1142,7 +1228,8 @@ pub fn run() {
             open_panes,
             story_notes,
             set_notes,
-            forget_map
+            forget_map,
+            set_pane_layout
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")

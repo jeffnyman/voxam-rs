@@ -13,6 +13,7 @@
   --grid-size: 14px;
   --measure: 900px;
   --pane: 340px;
+  --split: 50%;
 }
 html, body {
   margin: 0;
@@ -145,9 +146,68 @@ body.pane-notes #notepane {
   display: flex;
   flex: 1;
 }
+/* With both panes open the map takes its stored share and the
+   notes take the rest; with one open it takes the whole column,
+   so closing a pane never leaves a gap and reopening it restores
+   the division rather than snapping to halves. */
+body.pane-map.pane-notes #mappane {
+  flex: 0 0 var(--split);
+}
 body.pane-map.pane-notes #notepane {
-  border-top: 1px solid;
-  border-color: inherit;
+  flex: 1 1 auto;
+}
+/* The two grips: one dividing the story from the panes, one
+   dividing the panes from each other. Each is a thin band that
+   widens its reach past its own pixels, so it can be caught
+   without aiming. */
+#panegrip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 7px;
+  z-index: 9;
+  cursor: col-resize;
+}
+#splitgrip {
+  display: none;
+  flex: 0 0 7px;
+  margin: -3px 0;
+  cursor: row-resize;
+  z-index: 9;
+}
+body.pane-map.pane-notes #splitgrip {
+  display: block;
+}
+/* The band itself is invisible; the hairline inside it is what
+   the eye sees, and it brightens under the hand. */
+#panegrip::after,
+#splitgrip::after {
+  content: "";
+  display: block;
+  background: currentColor;
+  opacity: 0.18;
+}
+#panegrip::after {
+  width: 1px;
+  height: 100%;
+  margin-left: 3px;
+}
+#splitgrip::after {
+  height: 1px;
+  width: 100%;
+  margin-top: 3px;
+}
+#panegrip:hover::after,
+#splitgrip:hover::after,
+body.dragging #panegrip::after,
+body.dragging #splitgrip::after {
+  opacity: 0.5;
+}
+/* A drag must not paint the page in selection blue on its way. */
+body.dragging {
+  user-select: none;
+  cursor: inherit;
 }
 #panes h2 {
   margin: 0;
@@ -360,10 +420,12 @@ body.theme-dark #panes {
 <div id="errorpane" style="display:none;"><div id="errorcontent">...</div></div>
 </div>
 <div id="panes">
+<div id="panegrip" title="Drag to resize; double-click to reset"></div>
 <div id="mappane">
 <h2>Map</h2>
 <div id="mapdraw"></div>
 </div>
+<div id="splitgrip" title="Drag to divide; double-click to reset"></div>
 <div id="notepane">
 <h2>Notes<button id="stamp" class="CanHaveInputFocus" title="Write in the room you are standing in">where I am</button></h2>
 <textarea id="notes" class="CanHaveInputFocus" spellcheck="false" placeholder="Notes for this story, kept under its IFID."></textarea>
