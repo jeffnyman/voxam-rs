@@ -598,6 +598,28 @@ sweeps prove the outputs identical across all of them.
   `--interpreter`, which it had parsed and silently dropped, and
   the thirteen browser-face drills passed unchanged, which is what
   says the lift was a move and not a rewrite.
+- **The browser has no clock and no entropy of its own.** Two
+  places in the machines reach past the program for something the
+  operating system usually holds, and `wasm32-unknown-unknown`
+  holds neither: the standard library's clock there does not
+  refuse but *panics*. Both are now target-gated, and the census
+  behind the gating was taken rather than assumed -- both sites
+  were instrumented and the corpus driven through them. Glulx's
+  `glk_current_time` is asked by no recording at all, and already
+  had its seam (`now_override`), so that target answers the epoch
+  and a host wanting a real time hands one over. The Å-machine's
+  single clock read turned out to be nothing but the RNG's
+  unseeded fallback -- every Å fixture reaches it, and only
+  because they run unseeded -- so `--seed` *is* that machine's
+  clock injection, and the wasm build takes the same entropy the
+  other two machines' RNGs already take at their unseeded starts.
+  Either way an unseeded session is unreproducible by definition,
+  so nothing certified can tell the difference. `getrandom` needs
+  telling where entropy comes from on that target (a crate feature
+  and a `--cfg`, both scoped to it, in `voxam-core/Cargo.toml` and
+  `.cargo/config.toml`), after which `voxam-core` compiles to wasm
+  whole -- which is the first real test of this document's standing
+  claim that the core carries no display or filesystem opinions.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes

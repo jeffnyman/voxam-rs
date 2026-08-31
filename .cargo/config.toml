@@ -1,0 +1,10 @@
+# The browser target's one standing flag.
+#
+# getrandom refuses wasm32-unknown-unknown unless it is told which
+# backend to take entropy from -- there is no operating system
+# there to ask -- and the choice is a cfg rather than a feature.
+# Its companion, the crate feature the backend needs, sits in
+# crates/voxam-core/Cargo.toml. Both are scoped to the one target,
+# so every native build is exactly as it was.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

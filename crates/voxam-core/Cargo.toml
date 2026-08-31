@@ -9,3 +9,11 @@ repository.workspace = true
 [dependencies]
 getrandom = "0.4.3"
 unicode-normalization = "0.1.24"
+
+# The browser's wasm has no operating system to ask for entropy,
+# so getrandom must be told to take it from the page instead --
+# the crate refuses that target outright without this. The flag
+# it also wants lives in .cargo/config.toml beside it. Native
+# builds never see either.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4.3", features = ["wasm_js"] }

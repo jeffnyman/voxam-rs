@@ -148,6 +148,16 @@ cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+The core must also keep compiling for the browser, whose target
+holds neither a clock nor entropy of its own; the gated code there
+is invisible to a native lint, so it gets its own pass:
+
+```sh
+rustup target add wasm32-unknown-unknown   # once
+cargo check -p voxam-core --target wasm32-unknown-unknown
+cargo clippy -p voxam-core --target wasm32-unknown-unknown -- -D warnings
+```
+
 The shell stands outside the workspace, so it gates on its own --
 its map and sidecar reading are ordinary Rust with ordinary tests:
 

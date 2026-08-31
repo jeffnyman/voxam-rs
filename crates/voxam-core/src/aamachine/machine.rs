@@ -280,6 +280,29 @@ pub struct Machine<V: Voice> {
     held: State,
 }
 
+/// The dice a session rolls when nobody named a seed.
+///
+/// The reference reads the wall clock here, and this is the only
+/// clock the Å-machine reads at all -- so a seeded session never
+/// touches one, which is what makes `--seed` reproducible to the
+/// last roll. A browser's wasm has no clock to read (asking there
+/// panics rather than refusing), so that target takes the same
+/// entropy the other two machines' RNGs already take at their own
+/// unseeded starts. Either way an unseeded session is
+/// unreproducible by definition, so nothing certified can see the
+/// difference.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn unseeded() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |told| told.as_nanos() as u32)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn unseeded() -> u32 {
+    getrandom::u32().expect("operating system entropy")
+}
+
 impl<V: Voice> Machine<V> {
     /// Ready a story for its first run.
     ///
@@ -1224,11 +1247,7 @@ impl<V: Voice> Machine<V> {
         self.in_status = 0;
         self.n_span = 0;
         self.n_link = 0;
-        self.dice = self.seed.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |told| told.as_nanos() as u32)
-        });
+        self.dice = self.seed.unwrap_or_else(unseeded);
 
         if clear_undo {
             self.undo = Vec::new();

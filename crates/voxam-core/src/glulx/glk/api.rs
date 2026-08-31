@@ -253,6 +253,22 @@ pub struct Glk {
     next_key: u32,
 }
 
+/// The wall clock, where one exists.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn wall_clock() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |lived| lived.as_secs_f64())
+}
+
+/// A browser has no clock the standard library can read, and
+/// asking for one there panics rather than refusing. The epoch is
+/// the honest answer; a host with a real time sets `now_override`.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn wall_clock() -> f64 {
+    0.0
+}
+
 impl Glk {
     /// Open with no windows, over a display.
     pub fn new(frontend: Box<dyn Frontend>) -> Self {
@@ -2475,13 +2491,17 @@ impl Glk {
     }
 
     // -- the system clock (Glk: The System Clock) --------------------------
+    //
+    // The wall clock a session reads when nothing overrides it.
+    // A browser's wasm has none to read -- the standard library's
+    // clock is not merely unsupported there but *panics* -- so
+    // that target answers the epoch, and a host that wants a real
+    // time hands one over through `now_override`, which is also
+    // how a session is made reproducible: a seeded run that reads
+    // the wall clock is not reproducible at all.
 
     fn now(&self) -> f64 {
-        self.now_override.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0.0, |lived| lived.as_secs_f64())
-        })
+        self.now_override.unwrap_or_else(wall_clock)
     }
 
     /// Store the current Unix time as a glktimeval_t.
