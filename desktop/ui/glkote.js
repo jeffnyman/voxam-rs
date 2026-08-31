@@ -2176,6 +2176,25 @@ function insert_text_detecting(el, val) {
     el.append(document.createTextNode(val));
 }
 
+/* VOXAM: whether the player is writing somewhere of the shell's
+   own -- the notes pane, or anything else wearing the class this
+   library already yields to.
+
+   The document's keypress handler yields to such an element
+   before redirecting a keystroke at the story's prompt, but the
+   focus grabs do not: an arriving update takes the cursor back
+   unasked, which in a timed story would empty the notepad's
+   cursor mid-sentence, and after a [MORE] page likewise. Every
+   focus in this library goes through voxam_focus, so asking the
+   question once there covers all of them.
+*/
+function voxam_writing() {
+    const held = document.activeElement;
+
+    return !!held && typeof held.className == 'string'
+        && held.className.indexOf('CanHaveInputFocus') >= 0;
+}
+
 /* VOXAM: focus a window's input without letting the browser
    scroll it into view. Focusing an element inside the page's
    overflow-hidden containers scrolls them -- which drags a stage
@@ -2184,6 +2203,11 @@ function insert_text_detecting(el, val) {
    text windows keep the stock scroll-to-input courtesy.
 */
 function voxam_focus(win) {
+    if (voxam_writing()) {
+        /* The player is writing in a pane of the shell's own. */
+        return;
+    }
+
     if (win.type == 'graphics') {
         win.inputel.get(0).focus({ preventScroll: true });
         win.frameel.scrollLeft(0);
