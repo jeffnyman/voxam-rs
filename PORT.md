@@ -326,7 +326,13 @@ changed the design:
 
 Persistence is one JSON file per IFID beside the display
 settings, written only when the map actually grew, so a session
-spent examining the scenery rewrites nothing.
+spent examining the scenery rewrites nothing. Since a map outlives
+the sitting that drew it, there is a way to throw one away --
+View > Forget This Map, asked before it is done, this story's map
+alone, the notes untouched. Forgetting takes a wholly fresh map
+rather than emptying the old one: a cell still claimed or a story
+still disbelieved would haunt the walk that follows, which is
+what the forgetting drill pins.
 
 The pane (`desktop/ui/voxam-map.js`) only draws: it is handed
 rooms with their cells, directed passages, and the room the

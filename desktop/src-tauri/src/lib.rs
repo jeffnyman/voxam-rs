@@ -743,6 +743,28 @@ async fn walked_map(state: State<'_, Shell>) -> Result<Map, String> {
     Ok(state.map.lock().unwrap().clone())
 }
 
+/// Throw away the map of the story being played.
+///
+/// The page asks the player first: a map is an hour's walking, and
+/// nothing here can bring one back. What it forgets is this story's
+/// alone -- its file goes with it, so a map disbelieved for a stale
+/// location can be started over once the story is understood.
+#[tauri::command]
+async fn forget_map(app: AppHandle, state: State<'_, Shell>) -> Result<(), String> {
+    *state.map.lock().unwrap() = Map::default();
+
+    if let Some(ifid) = state.ifid.lock().unwrap().as_deref() {
+        if let Some(path) = map_path(&app, ifid) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    // The pane redraws to the empty map it now is.
+    let _ = app.emit("map", Map::default());
+
+    Ok(())
+}
+
 /// Where a story's notes are kept: one plain text file per IFID,
 /// beside its map. Plain text on purpose -- a player's notes
 /// should outlive this shell and open in anything.
@@ -965,7 +987,11 @@ pub fn run() {
                 standing.notes,
                 Some("CmdOrCtrl+E"),
             )?;
-            let view = Submenu::with_items(handle, "View", true, &[&mapped, &noted])?;
+            let apart = PredefinedMenuItem::separator(handle)?;
+            let forget =
+                MenuItem::with_id(handle, "map:forget", "Forget This Map", true, None::<&str>)?;
+            let view =
+                Submenu::with_items(handle, "View", true, &[&mapped, &noted, &apart, &forget])?;
             let menu = Menu::with_items(handle, &[&file, &story, &display, &view])?;
 
             app.set_menu(menu)?;
@@ -997,6 +1023,11 @@ pub fn run() {
                     // The page owns no flow here: unpin directly,
                     // and set_home rights the checkmark.
                     let _ = app.emit("menu-follow", ());
+                }
+                "map:forget" => {
+                    // The page owns the flow, since it owns the
+                    // asking: nothing is thrown away unanswered.
+                    let _ = app.emit("menu-forget-map", ());
                 }
                 chose @ ("pane:map" | "pane:notes") => {
                     // The pane opens and closes live: no restart
@@ -1110,7 +1141,8 @@ pub fn run() {
             walked_map,
             open_panes,
             story_notes,
-            set_notes
+            set_notes,
+            forget_map
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")

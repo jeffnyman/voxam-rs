@@ -114,6 +114,11 @@ happened: passages are one-way until walked both ways, undo and
 restore never invent a corridor, and a story that does not report
 where the player is says so instead of drawing a fiction.
 
+A map is kept between sittings, so a story picked up again opens
+where its walking left off; View > Forget This Map throws one
+away when a walk is better started over, asking first, and never
+touching the notes.
+
 The **notes** pane (View > Notes, or Ctrl+E) is a notepad per
 story, saved as you write and kept under the same IFID, in plain
 text you can open in anything. Its one button writes in the room

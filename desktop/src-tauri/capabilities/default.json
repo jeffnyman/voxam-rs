@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The one window: core events for the pipe's deliveries, the dialog for choosing a story.",
+  "description": "The one window: core events for the pipe's deliveries, the dialog for choosing a story, and the asking of a question before anything is thrown away.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": ["core:default", "dialog:default", "dialog:allow-ask"]
 }

@@ -826,6 +826,37 @@ mod tests {
         assert_eq!(held["edges"][1]["step"]["way"], "west");
     }
 
+    // Forgetting a map is starting over, not merely emptying the
+    // rooms: a cell still claimed, or a story still disbelieved,
+    // would haunt the walk that follows. The shell forgets by
+    // taking a fresh map, so what "fresh" means is pinned here.
+    #[test]
+    fn a_forgotten_map_starts_over_whole() {
+        let mut walked = Map::default();
+
+        walked.observe(&at(1, "Ledge", None));
+        walked.observe(&at(2, "Pit", Some("n")));
+
+        for _ in 0..STUCK_LIMIT {
+            walked.observe(&at(2, "Pit", Some("e")));
+        }
+
+        assert!(walked.unreliable, "the drill needs a map gone wrong");
+
+        let mut map = Map::default();
+
+        assert!(map.rooms.is_empty());
+        assert!(map.edges.is_empty());
+        assert_eq!(map.here, None);
+        assert!(!map.unreliable);
+
+        // The cell the old map held is free again, so the first
+        // room of the new walk stands at the origin.
+        map.observe(&at(2, "Pit", None));
+
+        assert_eq!(cell(&map, 2), (0, 0));
+    }
+
     #[test]
     fn a_map_survives_being_written_and_read_back() {
         let mut map = Map::default();

@@ -267,6 +267,18 @@ window.addEventListener("DOMContentLoaded", function() {
     paned(event.payload);
   });
 
+  /* Forgetting a map is an hour's walking undone and nothing
+     brings it back, so it is asked before it is done. */
+  listen("menu-forget-map", function() {
+    dialog.ask(
+      "The rooms and passages walked in this story will be forgotten. " +
+        "Notes are kept.",
+      { title: "Forget this map?", kind: "warning", okLabel: "Forget" }
+    ).then(function(willing) {
+      if (willing) invoke("forget_map");
+    }).catch(function() {});
+  });
+
   /* The map arrives only when it has grown: the shell reads the
      sidecar off each update and sends the map on when a room or
      a passage is new. */
