@@ -29,6 +29,9 @@ pub mod png;
 mod png_tests;
 pub mod saves;
 pub mod screen;
+pub mod session;
+#[cfg(test)]
+mod session_tests;
 pub mod stage;
 #[cfg(test)]
 mod stage_tests;

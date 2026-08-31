@@ -23,6 +23,7 @@ use voxam_core::glulx::glk::resources::Resources;
 use voxam_core::glulx::glk::stdio::StdioFrontend;
 use voxam_core::glulx::machine::Machine as GlulxMachine;
 use voxam_core::glulx::story::Story as GlulxStory;
+use voxam_core::session::{BLORB_SUFFIXES, Opening};
 use voxam_core::zmachine::machine::{Identity, Machine, RunState};
 use voxam_core::zmachine::story::Story;
 
@@ -225,127 +226,99 @@ fn interpreter_number(name: &str) -> Option<u8> {
     }
 }
 
+/// The wire's pieces of one story path: its name, its bytes, and
+/// any like-named sidecar Blorb's bytes.
+type WirePieces = (String, Vec<u8>, Option<Vec<u8>>);
+
+/// Gather a story's wire pieces -- the filesystem's whole share of
+/// the session facade's work.
+fn wire_pieces(path: &Path) -> Result<WirePieces, String> {
+    let name = basename(&path.to_string_lossy());
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+
+    // A Blorb-suffixed path is its own container; only a bare
+    // story looks beside itself.
+    let suffix = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase());
+
+    if let Some(suffix) = &suffix
+        && BLORB_SUFFIXES.contains(&suffix.as_str())
+    {
+        return Ok((name, bytes, None));
+    }
+
+    for sidecar_suffix in BLORB_SUFFIXES {
+        let sidecar = path.with_extension(sidecar_suffix);
+
+        if sidecar.exists() {
+            let held = std::fs::read(&sidecar).map_err(|error| error.to_string())?;
+
+            return Ok((name, bytes, Some(held)));
+        }
+    }
+
+    Ok((name, bytes, None))
+}
+
 /// Speak the GlkOte protocol for one story on stdin and stdout.
 ///
 /// Nothing else may print there -- no banner, no verdict -- so the
-/// display's own error stanza is the only voice a failure has.
+/// display's own error stanza is the only voice a failure has, and
+/// pre-wire refusals speak as bare voxam: text, the shell
+/// contract's own word for them. The recognition and the serving
+/// both live in the core's session facade; this arm owns only the
+/// filesystem and the exit code.
 fn serve_glkote(path: &str, seed: Option<u32>, identity: Identity) -> ExitCode {
-    let path = Path::new(path);
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let opening = wire_pieces(Path::new(path)).and_then(|(name, bytes, sidecar)| {
+        Opening::of(&name, bytes, sidecar).map_err(|error| error.to_string())
+    });
+    let opening = match opening {
+        Ok(opening) => opening,
         Err(error) => {
-            // Pre-wire refusals speak on stdout as bare voxam:
-            // text -- the shell contract's own word for them.
             println!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
+
     let mut reader = std::io::BufReader::new(std::io::stdin());
     let mut writer = std::io::stdout();
 
-    let clean = match sniff(&bytes) {
-        Some(StoryFormat::Glulx) => {
-            let Ok(Some((loaded, blorb))) = load_glulx(path) else {
-                println!("voxam: {} holds no playable Glulx story", path.display());
-                return ExitCode::from(EXIT_UNUSABLE);
-            };
-
-            match voxam_core::glulx::glk::glkote::opened(loaded, blorb, seed) {
-                Ok((mut machine, face)) => voxam_core::glulx::glk::glkote::serve(
-                    &mut machine,
-                    &face,
-                    &mut reader,
-                    &mut writer,
-                ),
-                Err(error) => {
-                    println!("voxam: {error}");
-                    return ExitCode::from(EXIT_UNUSABLE);
-                }
-            }
+    match opening.serve(&mut reader, &mut writer, seed, identity) {
+        Ok(clean) => ExitCode::from(if clean { EXIT_OK } else { EXIT_UNUSABLE }),
+        Err(error) => {
+            println!("voxam: {error}");
+            ExitCode::from(EXIT_UNUSABLE)
         }
-        Some(StoryFormat::AaMachine) => match AAMachineStory::new(&bytes) {
-            Ok(loaded) => {
-                voxam_core::aamachine::glkote::serve(loaded, &mut reader, &mut writer, seed)
-            }
-            Err(error) => {
-                println!("voxam: {error}");
-                return ExitCode::from(EXIT_UNUSABLE);
-            }
-        },
-        _ => {
-            let (loaded, blorb) = match load_story(path) {
-                Ok(held) => held,
-                Err(error) => {
-                    println!("voxam: {error}");
-                    return ExitCode::from(EXIT_UNUSABLE);
-                }
-            };
-            let resources = voxam_core::glulx::glk::resources::Resources::new(blorb);
-            let frontend =
-                match voxam_core::zmachine::glkote::fronted(loaded.version(), Some(resources)) {
-                    Ok(frontend) => frontend,
-                    Err(error) => {
-                        println!("voxam: {error}");
-                        return ExitCode::from(EXIT_UNUSABLE);
-                    }
-                };
-
-            voxam_core::zmachine::glkote::serve_claimed(
-                loaded,
-                frontend,
-                &mut reader,
-                &mut writer,
-                seed,
-                identity,
-            )
-        }
-    };
-
-    ExitCode::from(if clean { EXIT_OK } else { EXIT_UNUSABLE })
+    }
 }
 
 /// Serve one story to the browser, under its own name.
 fn serve_webbed(path: &str, seed: Option<u32>, port: u16) -> ExitCode {
-    let path = Path::new(path);
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let opening = wire_pieces(Path::new(path)).and_then(|(name, bytes, sidecar)| {
+        Opening::of(&name, bytes, sidecar).map_err(|error| error.to_string())
+    });
+    let opening = match opening {
+        Ok(opening) => opening,
         Err(error) => {
             eprintln!("voxam: {error}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
     };
 
-    let session = match sniff(&bytes) {
-        Some(StoryFormat::Glulx) => {
-            let Ok(Some((loaded, blorb))) = load_glulx(path) else {
-                eprintln!("voxam: {} holds no playable Glulx story", path.display());
-                return ExitCode::from(EXIT_UNUSABLE);
-            };
+    let (session, caption) = match opening {
+        Opening::Glulx { story, blorb } => {
             let caption = titled(&blorb);
 
-            (web::Session::glulx(loaded, blorb, seed), caption)
+            (web::Session::glulx(story, blorb, seed), caption)
         }
-        Some(StoryFormat::AaMachine) => match AAMachineStory::new(&bytes) {
-            Ok(loaded) => (web::Session::aamachine(loaded, None, seed), None),
-            Err(error) => {
-                eprintln!("voxam: {error}");
-                return ExitCode::from(EXIT_UNUSABLE);
-            }
-        },
-        _ => {
-            let (loaded, blorb) = match load_story(path) {
-                Ok(held) => held,
-                Err(error) => {
-                    eprintln!("voxam: {error}");
-                    return ExitCode::from(EXIT_UNUSABLE);
-                }
-            };
+        Opening::Aa { story } => (web::Session::aamachine(story, None, seed), None),
+        Opening::Z { story, blorb } => {
             let caption = titled(&blorb);
 
-            (web::Session::z(loaded, blorb, seed), caption)
+            (web::Session::z(story, blorb, seed), caption)
         }
     };
-    let (session, caption) = session;
     let mut face = web::Face::new(session, caption.as_deref());
     let listener = match web::webbed(port) {
         Ok(listener) => listener,
@@ -1073,8 +1046,6 @@ fn glulx_replay(
 }
 
 /// The suffixes a Blorb wears (Blorb: Introduction).
-const BLORB_SUFFIXES: [&str; 4] = ["blb", "blorb", "zblorb", "gblorb"];
-
 /// Load a story and whatever resources belong to it: a path with
 /// a Blorb suffix must carry a packaged story; any other path
 /// loads as a story file, with a like-named Blorb beside the

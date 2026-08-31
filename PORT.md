@@ -79,7 +79,7 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
 | `png.py`, `aiff.py`, `wav.py`, `sixel.py`, `font3.py` | `voxam-core` or drop | Decided for `aiff`/`wav`/`png`: straight ports, zero-dep purity kept (the wire's data: urls need them, plus a hand-rolled base64 — and, for `png`, the hand-rolled `flate` module below). `sixel`/`font3`: decide when their era arrives. |
 | `acceptance.py`, `regtest.py`, `probe.py` | `voxam-core::harness` (or a dev-only crate) | The certification machinery. Ports early — it is how everything else is judged. |
 | `listing.py`, `glance.py`, `decompose.py`, `scribe.py` | `voxam` (CLI) | Inspection tools; `--listing` doubles as a decoder test. |
-| `cli.py` (2.3k lines) | `voxam` (CLI) | Flag surface preserved; `clap` or hand-rolled. |
+| `cli.py` (2.3k lines) | `voxam` (CLI), `voxam-core::session` | Flag surface preserved, hand-rolled. The story routing (`_play`'s Glulx-then-Å-then-Z order) lives in the core's session facade since milestone 7, bytes in, so every face begins identically. |
 | `glass.py`, `painter.py`, `screen.py`, `frontend.py` | ratatui face | **Rewrite in kind, not a port.** Done for the terminal half with milestone 6: `screen.py` and `frontend.py` ported to `voxam-core`, `editor.py` beside them, and `painter.py` rewritten as `voxam-glass::painter` -- the model rendered whole into ratatui's buffer, whose diff replaces blessed's damaged-row repaints. The pygame `glass.py` window is not carried: its duties (Version 6 pictures, the arc band, the stage) are the desktop shell's, already served over the wire. |
 | `glulx/glk/painted.py`, `glulx/glk/terminal.py`, `glulx/glk/wrap.py` | `voxam-glass::glk`, `voxam-core::glulx::glk::wrap` | The painted Glk spine and its terminal folded into one struct over ratatui's Backend seam; the wrapper ported whole. The pygame `glk/glass.py` stays with the shell, as above. |
 | `gallery.py` | `voxam-core::gallery` | Ported with the deferred Blorb chunks (RelN, Reso, APal, BPal): sizes eager, pixels lazy, the adaptive-palette dance and the baked replacements whole; `Fraction` becomes the module's own exact `Ratio`. |
@@ -388,6 +388,22 @@ sweeps prove the outputs identical across all of them.
   loop fresh, and the §15 redisplay courtesy returns the
   composed line below the scene once it is done. The trench-coat
   drill holds the whole nesting to Border Zone itself.
+- **The wire's beginning is held once, in the core.** The
+  reference's CLI routes every face to the machine that owns the
+  story inside `_play`; the port had grown that routing three
+  times over -- the play path, `--glkote`, and `--web` -- and the
+  wire pair had drifted from the reference's order, refusing a
+  Glulx Blorb as Z-code. Milestone 7's first move gathered the
+  recognition and the GlkOte serving into `voxam-core::session`
+  (`Opening`): bytes and a name in, never a path, so the same
+  facade serves the CLI, the browser face, the desktop shell's
+  in-process linking, and one day the wasm face, while the
+  filesystem's share -- reading the story, finding a like-named
+  sidecar -- stays with each caller. Re-walking the wire faces
+  through the reference's own order closed the Blorb divergence:
+  a `.gblorb` now serves over `--glkote` and `--web`, its opening
+  stanza proven byte-identical against the reference, and the
+  wire sweeps hold everything else exactly where it was.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes
