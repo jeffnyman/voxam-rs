@@ -133,9 +133,26 @@ are pulled, and both the width and the division are remembered.
 ## The browser module
 
 `crates/voxam-wasm` is the interpreter as a page can load it:
-stanzas in, stanzas out, no display of its own. Build both shapes
-with `crates/voxam-wasm/build.sh` -- `no-modules` for a plain
-`<script>` tag, `nodejs` for the sweep that certifies it.
+stanzas in, stanzas out, no display of its own.
+
+To play a story in a browser, build it and serve the demo:
+
+```sh
+crates/voxam-wasm/build.sh
+python -m http.server -d target/wasm/demo 8000
+```
+
+Open `http://localhost:8000`, choose a story file, and it plays --
+no server holds the machine, and the story never leaves the page.
+The demo is the module, the vendored GlkOte display the browser
+face already ships, and `demo/voxam-glkote.js`: the thirty lines
+that wire a story to that display, which any host can take as-is.
+Its wiring is drilled headlessly by `demo/check.js`, so the page
+is the only part that needs eyes.
+
+The build makes two other shapes beside the demo -- `no-modules`
+for a plain `<script>` tag, `nodejs` for the sweep that certifies
+it -- both from the same wasm, so what is certified is what ships.
 
 ```js
 await wasm_bindgen({ module_or_path: wasmBytes });   // bytes, never a fetch

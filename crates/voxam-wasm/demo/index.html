@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voxam in the browser</title>
+<link rel="stylesheet" href="glkote.css" type="text/css">
+<style type="text/css">
+html, body { margin: 0; height: 100%; background: #444; }
+#gameport {
+  position: absolute; overflow: hidden;
+  left: 50%; transform: translateX(-50%);
+  width: 100%; max-width: 900px; top: 0; bottom: 0;
+  background: white; color: black;
+}
+.BufferWindow, .BufferWindow .Input {
+  font-family: Palatino, Georgia, "Times New Roman", serif; font-size: 15px;
+}
+.GridWindow { background: #333; color: #fff; }
+.GridWindow .Style_user1 { background: #fff; color: #333; }
+.Style_user1 { background: #333; color: #fff; }
+.Input { color: inherit; background: transparent; }
+/* The landing sits over the gameport without hiding it: GlkOte
+   measures real geometry the moment it initializes. */
+#landing {
+  position: absolute; inset: 0; z-index: 10;
+  background: #444; color: #ddd; font-family: Georgia, serif;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 1em; text-align: center;
+}
+#landing h1 { font-size: 3em; letter-spacing: 0.15em; color: #0bf; margin: 0; }
+#landing p { margin: 0; max-width: 30em; line-height: 1.6; }
+#landing .quiet { color: #999; font-size: 0.9em; }
+#story { font-size: 1em; }
+#fault { color: #f9a; font-family: monospace; white-space: pre-wrap; max-width: 40em; }
+</style>
+</head>
+<body>
+<div id="gameport">
+<div id="windowport"></div>
+<div id="loadingpane" style="display:none;"><em>Loading…</em></div>
+<div id="errorpane" style="display:none;"><div id="errorcontent">…</div></div>
+</div>
+
+<div id="landing">
+<h1>V&Theta;X&Delta;M</h1>
+<p>The interpreter compiled for the page. Choose a story file and
+it plays here — no server holds the machine, and nothing is
+uploaded anywhere.</p>
+<input type="file" id="story">
+<p class="quiet">Z-Machine 1&ndash;8, Glulx, and the &Aring;-machine.
+Saving needs storage this page does not have, so a story that
+saves will say so.</p>
+<div id="fault"></div>
+</div>
+
+<script src="jquery-1.12.4.min.js"></script>
+<script src="glkote.js"></script>
+<script src="voxam-audio.js"></script>
+<script src="voxam-glkote.js"></script>
+<script src="voxam_wasm.js"></script>
+<script>
+/* The module is handed its wasm as *bytes* rather than a URL.
+   The default would fetch it, which works fine here; doing it by
+   hand is what an embedder with a strict CSP must do, so the demo
+   shows that road rather than the easy one. */
+var ready = fetch("voxam_wasm_bg.wasm")
+  .then(function (answer) { return answer.arrayBuffer(); })
+  .then(function (bytes) { return wasm_bindgen({ module_or_path: bytes }); });
+
+document.getElementById("story").addEventListener("change", function (event) {
+  var chosen = event.target.files[0];
+
+  if (!chosen) return;
+
+  Promise.all([ready, chosen.arrayBuffer()])
+    .then(function (both) {
+      var story;
+
+      try {
+        story = wasm_bindgen.Story.open(new Uint8Array(both[1]), {
+          name: chosen.name,
+        });
+      } catch (refusal) {
+        /* The module's one throw: a story that will not load. */
+        document.getElementById("fault").textContent = String(refusal.message || refusal);
+        return;
+      }
+
+      /* Wire the story to the display, then let GlkOte open the
+         conversation with its init -- in that order, since the
+         init is an event like any other and needs somewhere to
+         land. */
+      window.Game = voxamGame(story);
+
+      document.getElementById("landing").style.display = "none";
+      GlkOte.init();
+    })
+    .catch(function (fault) {
+      document.getElementById("fault").textContent = String(fault);
+    });
+});
+</script>
+</body>
+</html>
