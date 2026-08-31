@@ -1,86 +1,61 @@
-//! The desktop shell's core: one child process speaking GlkOte.
+//! The desktop shell's core: the interpreter linked in, speaking
+//! GlkOte over a pipe instead of a process boundary.
 //!
-//! The webview wears the display; `voxam --glkote` owns the story.
-//! This core spawns the child, pumps its stdout lines to the page
-//! as events, and writes the page's events back down its stdin.
-//! The contract with the child (the voxam CLI): the child is
-//! silent until sent the init stanza, flushes every line it
-//! writes, prints pre-wire refusals as bare `voxam: ...` text,
-//! and exits 0 on game over or EOF, 2 on a fault.
+//! The webview wears the display; the session facade in
+//! `voxam-core` owns the story. This core opens a pair of
+//! in-memory pipes, serves the session on a thread of its own,
+//! pumps the lines it writes to the page as events, and writes the
+//! page's events back down the other pipe. The contract the child
+//! process once kept is now kept by this module directly: nothing
+//! is said until the init stanza arrives, every line is a stanza,
+//! pre-wire refusals travel as bare `voxam: ...` text, and a
+//! session ends 0 on game over or hangup, 2 on a fault.
 //!
-//! Carried over from the reference's shell with one deliberate
-//! change: the interpreter is found beside the shell's own
-//! executable first -- the bundled arrangement, and the workspace
-//! build in development -- with the PATH kept only as the last
-//! road, where the reference had made it the only one.
+//! Milestone 7 swapped the subprocess out from under this file
+//! without the page noticing: the events, their shapes, and the
+//! session-id filtering are exactly as the spawned arrangement
+//! left them, so `shell.js` did not change a line. What went away
+//! with the child: finding an interpreter beside the shell, the
+//! missing-interpreter refusal, the console-window suppression,
+//! and the `--babel` subprocess a title bar used to cost.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, Wry};
+use voxam_core::pipe;
+use voxam_core::session::Opening;
+use voxam_core::zmachine::machine::Identity;
 
-/// The friendly failure when no interpreter can be found beside
-/// the shell, in the workspace build, or on the PATH.
-const NOT_FOUND: &str = "the voxam interpreter is missing.\n\n\
-    A packaged shell carries it beside itself; in development,\n\
-    build it first:\n\n    cargo build --release\n\n\
-    from the repository root, and the shell will find it.";
-
-/// Where the interpreter lives: beside the shell's own executable
-/// first -- the bundled arrangement -- then the workspace's own
-/// build for the development loop, then the PATH as a last road.
-fn interpreter() -> PathBuf {
-    let named = format!("voxam{}", std::env::consts::EXE_SUFFIX);
-
-    if let Ok(shell) = std::env::current_exe() {
-        if let Some(dir) = shell.parent() {
-            let beside = dir.join(&named);
-
-            if beside.is_file() {
-                return beside;
-            }
-
-            // The development loop: tauri dev builds the shell in
-            // desktop/src-tauri/target, and the workspace's own
-            // target stands at the repository root, four up.
-            for road in ["../../../../target/release", "../../../../target/debug"] {
-                let built = dir.join(road).join(&named);
-
-                if built.is_file() {
-                    return built;
-                }
-            }
-        }
-    }
-
-    PathBuf::from(named)
-}
+/// The exit codes the CLI spoke, kept for the page's ended bar: 0
+/// for a session that ended cleanly, 2 for one that faulted.
+const EXIT_OK: i32 = 0;
+const EXIT_UNUSABLE: i32 = 2;
 
 /// The screen's share the window opens at, as the pygame glass
 /// takes it: 0.85 of the desktop, centered.
 const SHARE: f64 = 0.85;
 
-/// The §11.1.3 platforms the Story menu offers, shown by the
-/// names Infocom used and passed by the names voxam's
-/// `--interpreter` takes. Glulx stories ignore the claim, so the
-/// spawn passes it unconditionally.
-const PLATFORMS: [(&str, &str); 11] = [
-    ("DECSystem-20", "dec-20"),
-    ("Apple IIe", "apple-iie"),
-    ("Macintosh", "macintosh"),
-    ("Amiga", "amiga"),
-    ("Atari ST", "atari-st"),
-    ("IBM PC", "ibm-pc"),
-    ("Commodore 128", "commodore-128"),
-    ("Commodore 64", "commodore-64"),
-    ("Apple IIc", "apple-iic"),
-    ("Apple IIgs", "apple-iigs"),
-    ("Tandy Color", "tandy-color"),
+/// The §11.1.3 platforms the Story menu offers: the names Infocom
+/// used, the words the menu ids are keyed by, and the numbers the
+/// header claims. Glulx and Å-machine stories have no such header
+/// and ignore the claim, so it rides every session unconditionally.
+const PLATFORMS: [(&str, &str, u8); 11] = [
+    ("DECSystem-20", "dec-20", 1),
+    ("Apple IIe", "apple-iie", 2),
+    ("Macintosh", "macintosh", 3),
+    ("Amiga", "amiga", 4),
+    ("Atari ST", "atari-st", 5),
+    ("IBM PC", "ibm-pc", 6),
+    ("Commodore 128", "commodore-128", 7),
+    ("Commodore 64", "commodore-64", 8),
+    ("Apple IIc", "apple-iic", 9),
+    ("Apple IIgs", "apple-iigs", 10),
+    ("Tandy Color", "tandy-color", 11),
 ];
 
 /// The identity the next machine boots with (§11.1.3-4): the
@@ -97,6 +72,19 @@ impl Default for Claim {
         Self {
             interpreter: "ibm-pc".to_string(),
             tandy: false,
+        }
+    }
+}
+
+impl Claim {
+    /// The claim as the machine wears it (§11.1.3-4).
+    fn identity(&self) -> Identity {
+        Identity {
+            interpreter: PLATFORMS
+                .iter()
+                .find(|(_, named, _)| *named == self.interpreter)
+                .map(|(_, _, number)| *number),
+            tandy: self.tandy,
         }
     }
 }
@@ -258,15 +246,14 @@ struct Chrome {
     following: CheckMenuItem<Wry>,
 }
 
-/// One running story: the child and the stdin we kept out of it.
+/// One running story: the writing end of the pipe it listens on.
 ///
-/// The stdout and stderr pipes are taken by the pump threads at
-/// spawn; only stdin stays here, so send_stanza can write without
-/// ever contending with the readers.
+/// The reading end belongs to the pump thread, so send_stanza
+/// never contends with it. Dropping this sender is the hangup that
+/// ends the session, exactly as closing a child's stdin was.
 struct Session {
     id: u64,
-    child: Child,
-    stdin: ChildStdin,
+    to_session: pipe::Sender,
 }
 
 #[derive(Default)]
@@ -339,44 +326,60 @@ async fn set_home(
     Ok(())
 }
 
-/// The story's name under the Treaty of Babel, asked of voxam
-/// itself -- `--babel` reports a Title line for any story a record
-/// names -- with the filename's stem standing in for the nameless.
+/// The story's name under the Treaty of Babel, read in-process
+/// where a `--babel` subprocess used to answer -- the same two
+/// roads that report's Title line takes: a Blorb's iFiction record
+/// names its story, and anything else is looked up in the Infocom
+/// catalog by IFID. The filename's stem stands in for the
+/// nameless, and every failure along the way falls back to it: a
+/// title bar is a courtesy, never a gate.
 fn titled(story: &Path) -> String {
     let stem = story
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Voxam".to_string());
 
-    let mut command = Command::new(interpreter());
-
-    command
-        .arg("--babel")
-        .arg(story)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        command.creation_flags(0x0800_0000);
-    }
-
-    let Ok(output) = command.output() else {
+    let Ok(bytes) = std::fs::read(story) else {
         return stem;
     };
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(title) = line.strip_prefix("Title: ") {
+    let blorbed = story
+        .extension()
+        .map(|held| held.to_string_lossy().to_lowercase())
+        .is_some_and(|suffix| voxam_core::session::BLORB_SUFFIXES.contains(&suffix.as_str()));
+
+    if blorbed {
+        let Ok(blorb) = voxam_core::blorb::Blorb::parse(&bytes) else {
+            return stem;
+        };
+        let record = blorb
+            .ifiction
+            .as_deref()
+            .and_then(voxam_core::babel::ifiction);
+
+        if let Some(title) = record.as_ref().and_then(|held| held.title.clone()) {
             if !title.trim().is_empty() {
                 return title.trim().to_string();
             }
         }
+
+        // A record that names no title still names an IFID, and
+        // the packaged story answers when it does not.
+        let identity = record.and_then(|held| held.ifid).or_else(|| {
+            blorb
+                .glulx()
+                .or_else(|| blorb.story())
+                .and_then(voxam_core::babel::ifid)
+        });
+
+        return identity
+            .and_then(|held| voxam_core::infocom::title(&held).map(str::to_string))
+            .unwrap_or(stem);
     }
 
-    stem
+    voxam_core::babel::ifid(&bytes)
+        .and_then(|held| voxam_core::infocom::title(&held).map(str::to_string))
+        .unwrap_or(stem)
 }
 
 /// The story the shell holds, surviving the page's reloads.
@@ -390,11 +393,17 @@ async fn current_story(state: State<'_, Shell>) -> Result<Option<String>, String
         .map(|path| path.to_string_lossy().into_owned()))
 }
 
-/// Spawn `voxam --glkote` on the held story and start the pumps.
+/// Serve the held story on a thread of its own and start the pump.
 ///
 /// Returns the minted session id; every event this session emits
 /// carries it, so a reloaded page can ignore a dead session's
 /// last words (the stale-ended race).
+///
+/// The story crosses to the serving thread as bytes and is opened
+/// over there: a built session is a thicket of `Rc` handles that
+/// could never cross a thread boundary, while bytes and pipe ends
+/// cross freely. That is why the facade takes bytes and not a
+/// path -- the linked host's whole arrangement rests on it.
 #[tauri::command]
 async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, String> {
     let story = state
@@ -404,62 +413,92 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
         .clone()
         .ok_or("no story has been chosen")?;
 
+    let name = story
+        .file_name()
+        .map(|held| held.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let bytes = std::fs::read(&story).map_err(|fault| format!("voxam: {fault}"))?;
+    let sidecar = sidecar_of(&story);
+
+    // The Story menu's claim joins the boot (§11.1.3-4); the
+    // machines without a header for it ignore it.
+    let identity = state.claim.lock().unwrap().identity();
+
     let mut held = state.session.lock().unwrap();
 
-    if let Some(mut old) = held.take() {
-        let _ = old.child.kill();
-        let _ = old.child.wait();
-    }
+    // A replaced session hangs up when its sender drops. One that
+    // is standing at a read ends on the spot; one spinning inside
+    // the machine plays on unheard until the shell exits, which is
+    // the linked arrangement's one honest cost -- see the departure
+    // note in PORT.md.
+    held.take();
 
     let id = state.minted.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let mut command = Command::new(interpreter());
+    let (to_session, from_host) = pipe::pipe();
+    let (to_host, from_session) = pipe::pipe();
 
-    command
-        .arg("--glkote")
-        .arg(&story)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    // The Story menu's claim joins the boot (§11.1.3-4); a Glulx
-    // story ignores it, so no story needs sniffing here.
-    let claim = state.claim.lock().unwrap().clone();
-
-    command.arg("--interpreter").arg(claim.interpreter);
-
-    if claim.tandy {
-        command.arg("--tandy");
-    }
-
-    // The parent being a windowed app does not stop a console
-    // child from flashing its own console; CREATE_NO_WINDOW does.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        command.creation_flags(0x0800_0000);
-    }
-
-    let mut child = command.spawn().map_err(|fault| {
-        if fault.kind() == std::io::ErrorKind::NotFound {
-            NOT_FOUND.to_string()
-        } else {
-            format!("voxam could not start: {fault}")
-        }
-    })?;
-
-    let stdin = child.stdin.take().expect("stdin was piped");
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
-
-    *held = Some(Session { id, child, stdin });
+    *held = Some(Session { id, to_session });
     drop(held);
+
+    // The serving thread's verdict, left where the pump can read it
+    // once the writing end drops: the store happens first, so an
+    // EOF always finds the code that explains it.
+    let verdict = Arc::new(AtomicI32::new(EXIT_OK));
+    let told = Arc::clone(&verdict);
+    let faults = app.clone();
+
+    std::thread::spawn(move || {
+        let mut reader = from_host;
+        let mut writer = to_host;
+
+        // A panic inside the machines is this shell's own crash,
+        // and the page's error pane is where a crash belongs --
+        // the stderr drain's duty, kept now that there is no
+        // stderr to drain.
+        let played = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Opening::of(&name, bytes, sidecar)
+                .and_then(|opening| opening.serve(&mut reader, &mut writer, None, identity))
+        }));
+
+        let code = match played {
+            Ok(Ok(true)) => EXIT_OK,
+            Ok(Ok(false)) => EXIT_UNUSABLE,
+            Ok(Err(error)) => {
+                // A pre-wire refusal, spoken in voxam's own words:
+                // the story would not load, or its face would not
+                // stand up, and no protocol yet exists to carry it.
+                let _ = faults.emit(
+                    "fault",
+                    json!({"id": id, "kind": "refusal", "text": format!("voxam: {error}")}),
+                );
+
+                EXIT_UNUSABLE
+            }
+            Err(panic) => {
+                let told = panic
+                    .downcast_ref::<&str>()
+                    .map(|held| (*held).to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "the interpreter panicked".to_string());
+
+                let _ = faults.emit("fault", json!({"id": id, "kind": "crash", "text": told}));
+
+                EXIT_UNUSABLE
+            }
+        };
+
+        told.store(code, Ordering::SeqCst);
+
+        // The pump's end of the story: dropping the writer is what
+        // EOFs it, and the code above is already in place to read.
+        drop(writer);
+    });
 
     let pump = app.clone();
 
     std::thread::spawn(move || {
-        let mut lines = BufReader::new(stdout);
+        let mut lines = from_session;
         let mut line = String::new();
 
         loop {
@@ -470,8 +509,6 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
                 Ok(_) => {}
             }
 
-            // Windows newline translation leaves \r on the line;
-            // trimmed before the JSON test and the passthrough.
             let text = line.trim_end();
 
             if text.is_empty() {
@@ -490,43 +527,39 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
             }
         }
 
-        // EOF: if this session is still the current one, reclaim it
-        // to reap the exit code; a replaced session dies silently.
+        // EOF: if this session is still the current one, retire it
+        // and report how it ended; a replaced session dies silently.
         let state = pump.state::<Shell>();
         let mut held = state.session.lock().unwrap();
 
         if held.as_ref().map(|session| session.id) == Some(id) {
-            let mut session = held.take().expect("the id just matched");
+            held.take();
             drop(held);
 
-            let code = session
-                .child
-                .wait()
-                .ok()
-                .and_then(|status| status.code())
-                .unwrap_or(-1);
-
-            let _ = pump.emit("ended", json!({"id": id, "code": code}));
-        }
-    });
-
-    let drain = app.clone();
-
-    std::thread::spawn(move || {
-        let mut stderr = stderr;
-        let mut text = String::new();
-
-        // One fault for the whole stream: a Python traceback is one
-        // crash, not twenty lines of separate ones.
-        if stderr.read_to_string(&mut text).is_ok() && !text.trim().is_empty() {
-            let _ = drain.emit(
-                "fault",
-                json!({"id": id, "kind": "crash", "text": text.trim()}),
-            );
+            let _ = pump.emit("ended", json!({"id": id, "code": verdict.load(Ordering::SeqCst)}));
         }
     });
 
     Ok(id)
+}
+
+/// A bare story's like-named Blorb, when one lies beside it. A
+/// story that is its own container needs none: the facade unwraps
+/// what it carries.
+fn sidecar_of(story: &Path) -> Option<Vec<u8>> {
+    let suffix = story
+        .extension()
+        .map(|held| held.to_string_lossy().to_lowercase());
+
+    if suffix.is_some_and(|held| voxam_core::session::BLORB_SUFFIXES.contains(&held.as_str())) {
+        return None;
+    }
+
+    voxam_core::session::BLORB_SUFFIXES
+        .iter()
+        .map(|held| story.with_extension(held))
+        .find(|beside| beside.exists())
+        .and_then(|beside| std::fs::read(beside).ok())
 }
 
 /// The settings the page dresses in, asked at every load.
@@ -542,8 +575,8 @@ async fn send_stanza(state: State<'_, Shell>, line: String) -> Result<(), String
 
     let session = held.as_mut().ok_or("no session is running")?;
 
-    writeln!(session.stdin, "{line}")
-        .and_then(|()| session.stdin.flush())
+    writeln!(session.to_session, "{line}")
+        .and_then(|()| session.to_session.flush())
         .map_err(|fault| format!("the pipe failed: {fault}"))
 }
 
@@ -593,7 +626,7 @@ pub fn run() {
             let claimed = app.state::<Shell>().claim.lock().unwrap().clone();
             let mut interpreters = Vec::new();
 
-            for (shown, named) in PLATFORMS {
+            for (shown, named, _) in PLATFORMS {
                 interpreters.push((
                     named.to_string(),
                     CheckMenuItem::with_id(
@@ -780,17 +813,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("the shell could not be built")
         .run(|app, event| {
-            // Exit fires exactly once on every way out; the child
-            // is killed and reaped rather than orphaned. And if the
-            // shell dies hard instead, the closing pipe EOFs the
-            // child's stdin and voxam ends itself cleanly.
+            // Exit fires exactly once on every way out; the session
+            // is hung up rather than left listening. The serving
+            // thread is never joined: a machine spinning inside a
+            // story would hold the shell open forever, and the
+            // process is going away regardless.
             if let RunEvent::Exit = event {
-                let held = app.state::<Shell>().session.lock().unwrap().take();
-
-                if let Some(mut session) = held {
-                    let _ = session.child.kill();
-                    let _ = session.child.wait();
-                }
+                drop(app.state::<Shell>().session.lock().unwrap().take());
             }
         });
 }

@@ -24,6 +24,9 @@ pub mod glkote;
 pub mod glulx;
 pub mod iff;
 pub mod infocom;
+pub mod pipe;
+#[cfg(test)]
+mod pipe_tests;
 pub mod png;
 #[cfg(test)]
 mod png_tests;

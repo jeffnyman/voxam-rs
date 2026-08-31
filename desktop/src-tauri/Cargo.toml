@@ -19,6 +19,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# The interpreter itself, linked in rather than spawned: the shell
+# and the machines are one process since milestone 7.
+voxam-core = { path = "../../crates/voxam-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }

@@ -90,24 +90,24 @@ one scaled canvas, the art's own coordinate space.
 ## The desktop shell
 
 The Tauri shell lives in `desktop/`: the same GlkOte display in a
-native window, driving `voxam --glkote` underneath. The
-development loop:
+native window, with the interpreter linked into the shell itself.
+The development loop:
 
 ```sh
-cargo build --release          # the interpreter the shell finds
 cd desktop
 npm install                    # once, for the tauri CLI
 npm run tauri dev
 ```
 
-The shell finds the interpreter beside its own executable first
-(how a packaged install arranges it), then in the workspace's
-`target/`, then on the PATH. A packaged installer bundles the
-interpreter as a sidecar, so a player installs one thing and
-plays.
+The machines run on a thread of the shell's own process, speaking
+the same GlkOte wire over an in-memory pipe -- so there is no
+interpreter to find, none to bundle beside the installer, and a
+player installs one thing and plays. The CLI's `--glkote` stays
+what it always was: the certification wire the sweeps drive.
 
-Still to come -- the deluxe shell, with the interpreter linked
-in-process -- `PORT.md` holds the order it arrives in.
+Still to come -- the deluxe panes, the automapper and the
+note-taker keyed by IFID -- `PORT.md` holds the order they
+arrive in.
 
 ## Building
 

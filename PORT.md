@@ -38,12 +38,20 @@ reference keeps custody.
 The `desktop/` shell arrived with milestone 5: the reference's
 Tauri shell carried over whole (its own standalone Cargo project,
 kept out of the root workspace so the Tauri tree never rides
-`cargo test --workspace`), with one deliberate change -- the
-interpreter resolves beside the shell's own executable first (the
-bundled arrangement, and the workspace build in development), the
-PATH kept only as a last road. Packaging adds the sidecar bundling
-(tauri.conf.json externalBin) when installers are cut; milestone 7
-swaps the subprocess for in-process linking, the UI untouched.
+`cargo test --workspace`), spawning `voxam --glkote` as a child
+and speaking to its stdio.
+
+Milestone 7 swapped that subprocess for in-process linking, the
+UI untouched: `src-tauri` now takes a path dependency on
+`voxam-core` and serves each session on a thread of its own over
+the linked host's pipes (the departure below). What went away
+with the child: finding an interpreter beside the shell, the
+missing-interpreter refusal, the console-window suppression, the
+`--babel` subprocess a title bar cost, and the externalBin
+bundling packaging would have owed -- an installer now carries
+one executable, the shell with the machines inside it. The CLI's
+`--glkote` stays exactly as it was: it is the certification wire,
+and the sweeps drive it.
 
 The `crates/voxam-glass/` crate arrived with milestone 6: the
 painted terminal on ratatui -- the Z painter, the Glk display,
@@ -404,6 +412,34 @@ sweeps prove the outputs identical across all of them.
   a `.gblorb` now serves over `--glkote` and `--web`, its opening
   stanza proven byte-identical against the reference, and the
   wire sweeps hold everything else exactly where it was.
+- **The shell links the interpreter and pipes it by hand.** The
+  reference's shell spawns `voxam --glkote` and speaks to the
+  child's stdio; milestone 7 serves the session on a thread of the
+  shell's own process instead, over a byte pipe spelled in
+  `voxam-core::pipe` -- a shared queue with a condvar, blocking
+  reads, and a hangup at each end, since the standard library
+  offers no in-memory pipe and the purity rule argues against a
+  crate for sixty lines. The page never learned of it: the
+  `stanza`/`fault`/`ended` events keep their shapes and their
+  session-id filtering, so `shell.js` did not change a line.
+  Closing stdin became dropping the sender, killing the child
+  became the same drop, the stderr drain became `catch_unwind`
+  around the serving thread, and the `--babel` subprocess a title
+  bar cost became a direct call. The machines are full of `Rc`
+  handles and cannot cross a thread, so the story crosses as
+  *bytes* and is opened over there -- which is what the facade's
+  bytes-in shape was for. The linked sweep drives every Z
+  recording through both transports and diffs them, so the
+  hand-rolled pipe inherits the wire sweep's certification.
+  **Its one honest cost:** a thread cannot be killed. A session
+  standing at a read ends the moment its pipe hangs up, but one
+  spinning inside a story (Dead Cities does exactly this, in both
+  implementations) plays on unheard until the shell exits, where
+  a child process could simply be killed. The road out is a
+  cooperative stop flag the step loops consult -- the same
+  mechanism the glass wants for its own Control-C escape when a
+  story spins -- and it is deferred, named, until a spinning story
+  is worth answering.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes

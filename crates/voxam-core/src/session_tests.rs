@@ -6,7 +6,7 @@
 //! crafted stories; the corpus certification rides the wire
 //! sweeps, which drive the CLI through this same facade.
 
-use std::io::Cursor;
+use std::io::{BufRead, Cursor, Write};
 
 use crate::aamachine::story::{SUMMED, crc32};
 use crate::iff::{IffChunk, chunk as iff_chunk, write_form};
@@ -281,6 +281,46 @@ fn serves_a_glulx_story_to_its_quit() {
 
     assert!(clean);
     assert!(wire.contains(r#""type":"update""#));
+}
+
+// The linked host's arrangement: the story crosses to a thread as
+// bytes, the session is built and served entirely over there, and
+// the conversation travels the pipes. Nothing but bytes and pipe
+// ends cross the boundary, which is what lets a machine full of
+// Rc handles be served from a thread at all.
+#[test]
+fn serves_over_linked_pipes_from_another_thread() {
+    let bytes = z_image(Z_QUIT);
+    let (mut to_session, from_host) = crate::pipe::pipe();
+    let (to_host, mut from_session) = crate::pipe::pipe();
+
+    let serving = std::thread::spawn(move || {
+        let mut reader = from_host;
+        let mut writer = to_host;
+        let opening = Opening::of("story.z3", bytes, None).expect("a loadable story");
+
+        opening
+            .serve(&mut reader, &mut writer, Some(1), Identity::default())
+            .expect("a served session")
+    });
+
+    writeln!(
+        to_session,
+        r#"{{"type":"init","gen":0,"support":["timer"],"metrics":{{"width":800,"height":480,"gridcharwidth":10,"gridcharheight":20}}}}"#
+    )
+    .expect("a written init");
+
+    let mut update = String::new();
+
+    from_session.read_line(&mut update).expect("an update");
+
+    assert!(update.contains(r#""type":"update""#));
+
+    // The host hangs up; the session ends as it would on a closed
+    // stdin, and its verdict is a clean session.
+    drop(to_session);
+
+    assert!(serving.join().expect("the serving thread"));
 }
 
 #[test]
