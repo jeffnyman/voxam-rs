@@ -179,6 +179,8 @@ impl Display {
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Panes {
     map: bool,
+    #[serde(default)]
+    notes: bool,
 }
 
 fn panes_path(app: &AppHandle) -> Option<PathBuf> {
@@ -286,6 +288,7 @@ struct Chrome {
     displays: Vec<(String, CheckMenuItem<Wry>)>,
     following: CheckMenuItem<Wry>,
     mapped: CheckMenuItem<Wry>,
+    noted: CheckMenuItem<Wry>,
 }
 
 /// One running story: the writing end of the pipe it listens on.
@@ -319,6 +322,8 @@ struct Shell {
     ifid: Mutex<Option<String>>,
     /// Which side panes stand open.
     panes: Mutex<Panes>,
+    /// What the player has written about this story.
+    notes: Mutex<String>,
 }
 
 /// Remember the chosen story and wear its name on the title bar.
@@ -500,6 +505,10 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
     *state.map.lock().unwrap() = ifid
         .as_deref()
         .map(|held| load_map(&app, held))
+        .unwrap_or_default();
+    *state.notes.lock().unwrap() = ifid
+        .as_deref()
+        .map(|held| load_notes(&app, held))
         .unwrap_or_default();
     *state.ifid.lock().unwrap() = ifid;
 
@@ -734,6 +743,56 @@ async fn walked_map(state: State<'_, Shell>) -> Result<Map, String> {
     Ok(state.map.lock().unwrap().clone())
 }
 
+/// Where a story's notes are kept: one plain text file per IFID,
+/// beside its map. Plain text on purpose -- a player's notes
+/// should outlive this shell and open in anything.
+fn notes_path(app: &AppHandle, ifid: &str) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("notes").join(format!("{ifid}.txt")))
+}
+
+fn load_notes(app: &AppHandle, ifid: &str) -> String {
+    notes_path(app, ifid)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default()
+}
+
+fn save_notes(app: &AppHandle, ifid: &str, notes: &str) {
+    let Some(path) = notes_path(app, ifid) else {
+        return;
+    };
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    let _ = std::fs::write(path, notes);
+}
+
+/// The notes kept for the story being played.
+#[tauri::command]
+async fn story_notes(state: State<'_, Shell>) -> Result<String, String> {
+    Ok(state.notes.lock().unwrap().clone())
+}
+
+/// Keep what the player has written.
+///
+/// A story the Treaty cannot name keeps its notes for the session
+/// only: writing them under no name would file one story's notes
+/// where another's belong.
+#[tauri::command]
+async fn set_notes(app: AppHandle, state: State<'_, Shell>, text: String) -> Result<(), String> {
+    *state.notes.lock().unwrap() = text.clone();
+
+    if let Some(ifid) = state.ifid.lock().unwrap().as_deref() {
+        save_notes(&app, ifid, &text);
+    }
+
+    Ok(())
+}
+
 /// Which side panes stand open, asked at every load.
 #[tauri::command]
 async fn open_panes(state: State<'_, Shell>) -> Result<Panes, String> {
@@ -898,7 +957,15 @@ pub fn run() {
                 standing.map,
                 Some("CmdOrCtrl+M"),
             )?;
-            let view = Submenu::with_items(handle, "View", true, &[&mapped])?;
+            let noted = CheckMenuItem::with_id(
+                handle,
+                "pane:notes",
+                "Notes",
+                true,
+                standing.notes,
+                Some("CmdOrCtrl+E"),
+            )?;
+            let view = Submenu::with_items(handle, "View", true, &[&mapped, &noted])?;
             let menu = Menu::with_items(handle, &[&file, &story, &display, &view])?;
 
             app.set_menu(menu)?;
@@ -908,6 +975,7 @@ pub fn run() {
                 displays,
                 following,
                 mapped,
+                noted,
             });
 
             // The menu only signals; the page owns the flow, since
@@ -930,21 +998,28 @@ pub fn run() {
                     // and set_home rights the checkmark.
                     let _ = app.emit("menu-follow", ());
                 }
-                "pane:map" => {
+                chose @ ("pane:map" | "pane:notes") => {
                     // The pane opens and closes live: no restart
                     // is owed, and the page re-measures itself
                     // once the story's column has moved over.
                     let shell = app.state::<Shell>();
                     let mut panes = shell.panes.lock().unwrap();
 
-                    panes.map = !panes.map;
+                    if chose == "pane:map" {
+                        panes.map = !panes.map;
+                    } else {
+                        panes.notes = !panes.notes;
+                    }
 
                     let standing = panes.clone();
 
                     drop(panes);
                     save_panes(app, &standing);
 
-                    let _ = app.state::<Chrome>().mapped.set_checked(standing.map);
+                    let chrome = app.state::<Chrome>();
+
+                    let _ = chrome.mapped.set_checked(standing.map);
+                    let _ = chrome.noted.set_checked(standing.notes);
                     let _ = app.emit("panes", standing);
                 }
                 "tandy" => {
@@ -1033,7 +1108,9 @@ pub fn run() {
             set_home,
             bearings,
             walked_map,
-            open_panes
+            open_panes,
+            story_notes,
+            set_notes
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")

@@ -194,12 +194,27 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    parser consumes the device-attributes answer with no seam to
    read it, so until one exists the flag is an explicit opt-in,
    believed as asked and never the default.
-7. **The deluxe shell.** Interpreter linked in-process, automapper
-   and notes as panes, keyed by IFID. Then Tauri mobile, then wasm.
+7. **The deluxe shell.** Built, and awaiting its eyes pass. The
+   session facade gathered the wire's beginning into
+   `voxam-core::session` (and closed a Blorb divergence on the
+   way); the shell stopped spawning `voxam --glkote` and now
+   serves each session on a thread of its own over
+   `voxam-core::pipe`, the page none the wiser; the sidecar is
+   granted and read host-side; and the automapper and the
+   notepad stand as panes, both filed under the story's IFID.
+   *Gate:* the batteries of both trees, the linked sweep holding
+   every Z recording identical across the two transports, and an
+   eyes pass at the real window -- the one thing no headless
+   check can stand in for.
+8. **The mobile shell.** Tauri 2 carries `desktop/` to iOS and
+   Android; the panes earn their keep on a small screen or learn
+   another shape.
+9. **The browser face.** A wasm target of `voxam-core` married to
+   glkote.js -- the display with no server behind it.
 
 Milestones 1–4 are mechanical translation with a safety net.
-Milestone 6 is the largest rewrite. Milestone 7 is new work the
-Python implementation never had.
+Milestone 6 is the largest rewrite. Milestone 7 onward is new
+work the Python implementation never had.
 
 ## What the sidecar carries
 
@@ -328,6 +343,20 @@ passage spanning more than one cell is bowed and faded instead.
 The shape the pane reads -- `step.kind`, the lowercase way,
 `here`, a room's `x` and `y` -- is pinned by a contract test on
 the Rust side, so the two halves cannot drift apart silently.
+
+The notes pane is the map's plainer neighbour: free text per
+story, filed under the same IFID, and written as plain `.txt`
+rather than anything of this shell's own devising, because a
+player's notes should outlive the program that took them. It
+saves a breath after typing stops rather than on every keystroke,
+and settles whatever is pending when the box loses focus or the
+window goes away, so a closing shell never takes the last
+sentence with it. Its one button stamps in the room the player is
+standing in, which is the note a player is usually about to write
+anyway -- the only place the two panes touch. A story the Treaty
+cannot name keeps its notes for the session only, since writing
+them under no name would file one story's notes where another's
+belong.
 
 ## Departures the port has recorded
 

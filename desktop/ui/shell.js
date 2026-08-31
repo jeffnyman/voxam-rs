@@ -135,11 +135,62 @@ function dressed(display) {
    re-measures the story's column in the space that is left. The
    map itself is drawn from whatever the Rust side last sent. */
 function paned(panes) {
-  document.body.classList.toggle("mapped", !!panes.map);
+  document.body.classList.toggle("pane-map", !!panes.map);
+  document.body.classList.toggle("pane-notes", !!panes.notes);
+  document.body.classList.toggle("paned", !!(panes.map || panes.notes));
 
   window.dispatchEvent(new Event("resize"));
 
   if (panes.map) drawMap();
+}
+
+/* Notes are saved a breath after typing stops rather than on
+   every keystroke: the file is the player's, and rewriting it
+   thirty times a sentence earns nothing. */
+var NOTES_REST = 600;
+var notesTimer = null;
+
+function noteChanged() {
+  if (notesTimer) clearTimeout(notesTimer);
+
+  notesTimer = setTimeout(function() {
+    notesTimer = null;
+    invoke("set_notes", { text: document.getElementById("notes").value })
+      .catch(function() {});
+  }, NOTES_REST);
+}
+
+/* Whatever is pending, written now: a shell that is closing has
+   no breath left to wait for. */
+function noteSettled() {
+  if (!notesTimer) return;
+
+  clearTimeout(notesTimer);
+  notesTimer = null;
+  invoke("set_notes", { text: document.getElementById("notes").value })
+    .catch(function() {});
+}
+
+/* Stamp the room the player stands in at the cursor -- the note a
+   player is usually about to write anyway. */
+function stampHere() {
+  invoke("bearings").then(function(bearings) {
+    var where = bearings && bearings.location ? bearings.location.name : null;
+
+    if (!where) return;
+
+    var box = document.getElementById("notes");
+    var at = box.selectionStart;
+    var before = box.value.slice(0, at);
+    var after = box.value.slice(box.selectionEnd);
+    var written = (before && !before.endsWith("\n") ? "\n" : "") + where + ": ";
+
+    box.value = before + written + after;
+    box.focus();
+    box.selectionStart = box.selectionEnd = before.length + written.length;
+
+    noteChanged();
+  });
 }
 
 /* The last map the shell sent, kept so opening the pane draws
@@ -147,7 +198,7 @@ function paned(panes) {
 var mapHeld = null;
 
 function drawMap() {
-  if (!mapHeld || !document.body.classList.contains("mapped")) return;
+  if (!mapHeld || !document.body.classList.contains("pane-map")) return;
 
   VoxamMap.draw(mapHeld, document.getElementById("mapdraw"));
 }
@@ -189,6 +240,13 @@ function deliver(kind, payload) {
 window.addEventListener("DOMContentLoaded", function() {
   document.getElementById("open").addEventListener("click", chooseStory);
   document.getElementById("reopen").addEventListener("click", chooseStory);
+  document.getElementById("notes").addEventListener("input", noteChanged);
+  document.getElementById("notes").addEventListener("blur", noteSettled);
+  document.getElementById("stamp").addEventListener("click", stampHere);
+
+  /* A window closing, or a page reloading into a new story, must
+     not take the last sentence with it. */
+  window.addEventListener("beforeunload", noteSettled);
 
   listen("menu-open", chooseStory);
   listen("menu-restart", function() {
@@ -256,11 +314,16 @@ window.addEventListener("DOMContentLoaded", function() {
          up; init would only send its stanza into a dead pipe. */
       if (!faulted) GlkOte.init();
 
-      /* The map this story was left with, from the last time it
-         was played: the pane shows it before the first step. */
+      /* The map and notes this story was left with, from the last
+         time it was played: both panes show them before the first
+         step is taken. */
       invoke("walked_map").then(function(map) {
         mapHeld = map;
         drawMap();
+      });
+
+      invoke("story_notes").then(function(text) {
+        document.getElementById("notes").value = text || "";
       });
     }).catch(function(message) {
       stranded(String(message));

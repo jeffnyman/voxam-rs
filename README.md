@@ -114,8 +114,14 @@ happened: passages are one-way until walked both ways, undo and
 restore never invent a corridor, and a story that does not report
 where the player is says so instead of drawing a fiction.
 
-Still to come -- the note-taker, keyed by IFID as the maps are --
-`PORT.md` holds the order it arrives in.
+The **notes** pane (View > Notes, or Ctrl+E) is a notepad per
+story, saved as you write and kept under the same IFID, in plain
+text you can open in anything. Its one button writes in the room
+you are standing in. Both panes can stand open at once, sharing
+the column.
+
+Still to come -- the Tauri 2 mobile targets, and a wasm face for
+the browser -- `PORT.md` holds the order they arrive in.
 
 ## Building
 

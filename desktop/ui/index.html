@@ -32,7 +32,7 @@ html, body {
    what is left, so opening the map slides the column over rather
    than reflowing the prose under the player's eye. GlkOte
    re-measures on the resize the toggle fires. */
-body.mapped #gameport {
+body.paned #gameport {
   left: 0;
   right: var(--pane);
   width: auto;
@@ -114,7 +114,7 @@ body.theme-dark .GridWindow .Style_user1 {
 /* The map pane: a column at the right edge, shown only when the
    View menu says so. Its ink follows the story's, since the two
    are read together. */
-#mappane {
+#panes {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -126,10 +126,30 @@ body.theme-dark .GridWindow .Style_user1 {
   font-family: "Segoe UI", Helvetica, Arial, sans-serif;
   font-size: 12px;
 }
-body.mapped #mappane {
+body.paned #panes {
   display: flex;
 }
-#mappane h2 {
+/* Two panes share the column, each taking half; one alone takes
+   all of it. min-height:0 is what lets a flex child scroll
+   instead of pushing its neighbour off the bottom. */
+#mappane, #notepane {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+body.pane-map #mappane {
+  display: flex;
+  flex: 1;
+}
+body.pane-notes #notepane {
+  display: flex;
+  flex: 1;
+}
+body.pane-map.pane-notes #notepane {
+  border-top: 1px solid;
+  border-color: inherit;
+}
+#panes h2 {
   margin: 0;
   padding: 0.6em 0.9em;
   font-size: 11px;
@@ -147,6 +167,51 @@ body.mapped #mappane {
   margin: 0.4em 0.3em;
   opacity: 0.7;
   line-height: 1.5;
+}
+/* The notepad: plain text, kept per story, saved as it is
+   written. The heading carries the one button worth having --
+   stamping in the room the player stands in, which is the note a
+   player is usually about to write anyway. */
+#notepane h2 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6em;
+}
+#stamp {
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  padding: 0.15em 0.6em;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  border: 1px solid;
+  border-radius: 3px;
+  opacity: 0.75;
+}
+#stamp:hover {
+  opacity: 1;
+}
+#notes {
+  flex: 1;
+  min-height: 0;
+  margin: 0 0.6em 0.9em;
+  padding: 0.5em 0.6em;
+  resize: none;
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: transparent;
+  color: inherit;
+  border: 1px solid;
+  border-color: inherit;
+  border-radius: 3px;
+}
+#notes:focus {
+  outline: none;
+  opacity: 1;
 }
 .maproom {
   fill: none;
@@ -202,20 +267,23 @@ body.mapped #mappane {
   fill: currentColor;
   opacity: 0.55;
 }
-body.theme-paper #mappane {
+body.theme-paper #panes {
   background: #f2f2f2;
   color: #222;
   border-left: 1px solid #d5d5d5;
+  border-color: #d5d5d5;
 }
-body.theme-sepia #mappane {
+body.theme-sepia #panes {
   background: #ece2cb;
   color: #43382a;
   border-left: 1px solid #d8cbb0;
+  border-color: #d8cbb0;
 }
-body.theme-dark #mappane {
+body.theme-dark #panes {
   background: #171717;
   color: #cfcfcf;
   border-left: 1px solid #2c2c2c;
+  border-color: #2c2c2c;
 }
 /* The landing overlay covers the gameport but never hides it:
    GlkOte must measure real geometry the moment it initializes. */
@@ -291,9 +359,15 @@ body.theme-dark #mappane {
 </div>
 <div id="errorpane" style="display:none;"><div id="errorcontent">...</div></div>
 </div>
+<div id="panes">
 <div id="mappane">
 <h2>Map</h2>
 <div id="mapdraw"></div>
+</div>
+<div id="notepane">
+<h2>Notes<button id="stamp" title="Write in the room you are standing in">where I am</button></h2>
+<textarea id="notes" spellcheck="false" placeholder="Notes for this story, kept under its IFID."></textarea>
+</div>
 </div>
 <div id="landing">
 <h1>V&Theta;X&Delta;M</h1>
