@@ -798,6 +798,34 @@ mod tests {
         assert!(!map.unreliable);
     }
 
+    // The pane's contract. The drawing reads these very names off
+    // the JSON -- `step.kind`, the lowercase way, `here`, a room's
+    // `x` and `y` -- so the shape is pinned here rather than
+    // discovered by a pane that silently draws nothing.
+    #[test]
+    fn the_wire_the_pane_draws_from_keeps_its_shape() {
+        let mut map = Map::default();
+
+        map.observe(&at(1, "Attic", None));
+        map.observe(&at(2, "Cellar", Some("down")));
+        map.observe(&at(3, "Lawn", Some("west")));
+
+        let held = serde_json::to_value(&map).expect("a written map");
+
+        assert_eq!(held["rooms"]["1"]["name"], "Attic");
+        assert_eq!(held["rooms"]["1"]["x"], 0);
+        assert_eq!(held["rooms"]["1"]["y"], 0);
+        assert_eq!(held["here"], 3);
+        assert_eq!(held["unreliable"], false);
+
+        assert_eq!(held["edges"][0]["from"], 1);
+        assert_eq!(held["edges"][0]["to"], 2);
+        assert_eq!(held["edges"][0]["step"]["kind"], "down");
+
+        assert_eq!(held["edges"][1]["step"]["kind"], "compass");
+        assert_eq!(held["edges"][1]["step"]["way"], "west");
+    }
+
     #[test]
     fn a_map_survives_being_written_and_read_back() {
         let mut map = Map::default();

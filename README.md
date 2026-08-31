@@ -105,9 +105,17 @@ interpreter to find, none to bundle beside the installer, and a
 player installs one thing and plays. The CLI's `--glkote` stays
 what it always was: the certification wire the sweeps drive.
 
-Still to come -- the deluxe panes, the automapper and the
-note-taker keyed by IFID -- `PORT.md` holds the order they
-arrive in.
+The **map** pane (View > Map, or Ctrl+M) draws the rooms you have
+walked and the passages you took between them, following you as
+you go and coming back where you left it the next time you play
+that story. It is drawn from what the interpreter reports rather
+than from reading the prose, so it only ever shows what actually
+happened: passages are one-way until walked both ways, undo and
+restore never invent a corridor, and a story that does not report
+where the player is says so instead of drawing a fiction.
+
+Still to come -- the note-taker, keyed by IFID as the maps are --
+`PORT.md` holds the order it arrives in.
 
 ## Building
 

@@ -174,6 +174,41 @@ impl Display {
     }
 }
 
+/// Which side panes stand open. Persisted as panes.json beside
+/// the display settings, so the window opens as it was left.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct Panes {
+    map: bool,
+}
+
+fn panes_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("panes.json"))
+}
+
+fn load_panes(app: &AppHandle) -> Panes {
+    panes_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|held| serde_json::from_str(&held).ok())
+        .unwrap_or_default()
+}
+
+fn save_panes(app: &AppHandle, panes: &Panes) {
+    let Some(path) = panes_path(app) else {
+        return;
+    };
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    if let Ok(held) = serde_json::to_string_pretty(panes) {
+        let _ = std::fs::write(path, held);
+    }
+}
+
 /// Where the open-story dialog starts: a folder the player pinned
 /// by hand, or -- with nothing pinned -- wherever the last story
 /// was opened from, so a save to some other corner of the disk
@@ -250,6 +285,7 @@ struct Chrome {
     tandy: CheckMenuItem<Wry>,
     displays: Vec<(String, CheckMenuItem<Wry>)>,
     following: CheckMenuItem<Wry>,
+    mapped: CheckMenuItem<Wry>,
 }
 
 /// One running story: the writing end of the pipe it listens on.
@@ -281,6 +317,8 @@ struct Shell {
     /// what a map is filed under. A story the treaty cannot name
     /// keeps its map only for the session.
     ifid: Mutex<Option<String>>,
+    /// Which side panes stand open.
+    panes: Mutex<Panes>,
 }
 
 /// Remember the chosen story and wear its name on the title bar.
@@ -578,6 +616,10 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
                             if let Some(ifid) = state.ifid.lock().unwrap().as_deref() {
                                 save_map(&pump, ifid, &held);
                             }
+
+                            // The pane redraws only when there is
+                            // something new to draw.
+                            let _ = pump.emit("map", held);
                         }
                     }
 
@@ -690,6 +732,12 @@ fn save_map(app: &AppHandle, ifid: &str, map: &Map) {
 #[tauri::command]
 async fn walked_map(state: State<'_, Shell>) -> Result<Map, String> {
     Ok(state.map.lock().unwrap().clone())
+}
+
+/// Which side panes stand open, asked at every load.
+#[tauri::command]
+async fn open_panes(state: State<'_, Shell>) -> Result<Panes, String> {
+    Ok(state.panes.lock().unwrap().clone())
 }
 
 /// Where the player stands, as the wire last reported it.
@@ -834,7 +882,24 @@ pub fn run() {
                 .map(|group| group as &dyn IsMenuItem<Wry>)
                 .collect();
             let display = Submenu::with_items(handle, "Display", true, &rows)?;
-            let menu = Menu::with_items(handle, &[&file, &story, &display])?;
+
+            // The View menu: the side panes, each a toggle, opened
+            // as they were left. The map draws itself from the
+            // sidecar the shell already reads.
+            let standing = load_panes(handle);
+
+            *app.state::<Shell>().panes.lock().unwrap() = standing.clone();
+
+            let mapped = CheckMenuItem::with_id(
+                handle,
+                "pane:map",
+                "Map",
+                true,
+                standing.map,
+                Some("CmdOrCtrl+M"),
+            )?;
+            let view = Submenu::with_items(handle, "View", true, &[&mapped])?;
+            let menu = Menu::with_items(handle, &[&file, &story, &display, &view])?;
 
             app.set_menu(menu)?;
             app.manage(Chrome {
@@ -842,6 +907,7 @@ pub fn run() {
                 tandy,
                 displays,
                 following,
+                mapped,
             });
 
             // The menu only signals; the page owns the flow, since
@@ -863,6 +929,23 @@ pub fn run() {
                     // The page owns no flow here: unpin directly,
                     // and set_home rights the checkmark.
                     let _ = app.emit("menu-follow", ());
+                }
+                "pane:map" => {
+                    // The pane opens and closes live: no restart
+                    // is owed, and the page re-measures itself
+                    // once the story's column has moved over.
+                    let shell = app.state::<Shell>();
+                    let mut panes = shell.panes.lock().unwrap();
+
+                    panes.map = !panes.map;
+
+                    let standing = panes.clone();
+
+                    drop(panes);
+                    save_panes(app, &standing);
+
+                    let _ = app.state::<Chrome>().mapped.set_checked(standing.map);
+                    let _ = app.emit("panes", standing);
                 }
                 "tandy" => {
                     let shell = app.state::<Shell>();
@@ -949,7 +1032,8 @@ pub fn run() {
             story_home,
             set_home,
             bearings,
-            walked_map
+            walked_map,
+            open_panes
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")

@@ -131,6 +131,27 @@ function dressed(display) {
   window.dispatchEvent(new Event("resize"));
 }
 
+/* Open or close the side panes, then poke a resize so GlkOte
+   re-measures the story's column in the space that is left. The
+   map itself is drawn from whatever the Rust side last sent. */
+function paned(panes) {
+  document.body.classList.toggle("mapped", !!panes.map);
+
+  window.dispatchEvent(new Event("resize"));
+
+  if (panes.map) drawMap();
+}
+
+/* The last map the shell sent, kept so opening the pane draws
+   immediately rather than waiting for the next room. */
+var mapHeld = null;
+
+function drawMap() {
+  if (!mapHeld || !document.body.classList.contains("mapped")) return;
+
+  VoxamMap.draw(mapHeld, document.getElementById("mapdraw"));
+}
+
 function stranded(message) {
   document.getElementById("loadingpane").style.display = "none";
   document.getElementById("note").textContent = message;
@@ -184,11 +205,29 @@ window.addEventListener("DOMContentLoaded", function() {
   listen("display", function(event) {
     dressed(event.payload);
   });
+  listen("panes", function(event) {
+    paned(event.payload);
+  });
+
+  /* The map arrives only when it has grown: the shell reads the
+     sidecar off each update and sends the map on when a room or
+     a passage is new. */
+  listen("map", function(event) {
+    mapHeld = event.payload;
+    drawMap();
+  });
 
   /* The dress arrives before the story: GlkOte's init measures
      the page, so the page must already wear its type and ink. */
   invoke("display_settings").then(function(display) {
     dressed(display);
+
+    /* The panes are dressed before the story too: GlkOte's init
+       measures the page, so the column must already stand in the
+       width it is going to keep. */
+    return invoke("open_panes");
+  }).then(function(panes) {
+    paned(panes);
 
     return invoke("current_story");
   }).then(function(story) {
@@ -216,6 +255,13 @@ window.addEventListener("DOMContentLoaded", function() {
       /* A fault that beat the id here means the story never stood
          up; init would only send its stanza into a dead pipe. */
       if (!faulted) GlkOte.init();
+
+      /* The map this story was left with, from the last time it
+         was played: the pane shows it before the first step. */
+      invoke("walked_map").then(function(map) {
+        mapHeld = map;
+        drawMap();
+      });
     }).catch(function(message) {
       stranded(String(message));
     });

@@ -313,6 +313,22 @@ Persistence is one JSON file per IFID beside the display
 settings, written only when the map actually grew, so a session
 spent examining the scenery rewrites nothing.
 
+The pane (`desktop/ui/voxam-map.js`) only draws: it is handed
+rooms with their cells, directed passages, and the room the
+player stands in, and turns them into SVG. Its conventions follow
+the model's decisions -- a compass passage is a plain line
+because the model already placed those cells by that direction; a
+vertical or in/out passage is dashed and lettered rather than
+faking a bearing; an unnamed one is dotted; and a one-way passage
+carries an arrowhead, so the arrows that appear are worth
+noticing. One convention is the pane's own: because a placed room
+never moves, a passage whose far room was placed elsewhere would
+otherwise be ruled straight through every room between, so a
+passage spanning more than one cell is bowed and faded instead.
+The shape the pane reads -- `step.kind`, the lowercase way,
+`here`, a room's `x` and `y` -- is pinned by a contract test on
+the Rust side, so the two halves cannot drift apart silently.
+
 ## Departures the port has recorded
 
 Each is a documented translation, never a behaviour change; the

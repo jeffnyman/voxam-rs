@@ -50,6 +50,13 @@ fn main() {
         }
     }
 
+    // The map itself, for the pane's own drawing to be fed by.
+    if std::env::args().any(|held| held == "--json") {
+        println!("{}", serde_json::to_string(&map).expect("a written map"));
+
+        return;
+    }
+
     println!("updates: {updates}, sidecar blocks: {observed}");
 
     if map.unreliable {

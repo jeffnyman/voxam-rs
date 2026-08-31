@@ -12,6 +12,7 @@
   --story-size: 15px;
   --grid-size: 14px;
   --measure: 900px;
+  --pane: 340px;
 }
 html, body {
   margin: 0;
@@ -26,6 +27,18 @@ html, body {
   max-width: var(--measure);
   top: 0;
   bottom: 0;
+}
+/* With a pane open the story keeps its measure but centres in
+   what is left, so opening the map slides the column over rather
+   than reflowing the prose under the player's eye. GlkOte
+   re-measures on the resize the toggle fires. */
+body.mapped #gameport {
+  left: 0;
+  right: var(--pane);
+  width: auto;
+  transform: none;
+  margin-left: auto;
+  margin-right: auto;
 }
 .BufferWindow, .BufferWindow .Input {
   font-family: var(--story-face);
@@ -98,6 +111,112 @@ body.theme-dark .GridWindow .Style_user1 {
   background: #d6d6d6;
   color: #000;
 }
+/* The map pane: a column at the right edge, shown only when the
+   View menu says so. Its ink follows the story's, since the two
+   are read together. */
+#mappane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: var(--pane);
+  z-index: 8;
+  display: none;
+  flex-direction: column;
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 12px;
+}
+body.mapped #mappane {
+  display: flex;
+}
+#mappane h2 {
+  margin: 0;
+  padding: 0.6em 0.9em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+#mapdraw {
+  flex: 1;
+  overflow: auto;
+  padding: 0 0.6em 0.9em;
+}
+.mapnote {
+  margin: 0.4em 0.3em;
+  opacity: 0.7;
+  line-height: 1.5;
+}
+.maproom {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.1;
+  opacity: 0.75;
+}
+.maproom.here {
+  stroke-width: 2;
+  opacity: 1;
+}
+.mapname {
+  fill: currentColor;
+  font-size: 9px;
+  text-anchor: middle;
+  opacity: 0.8;
+}
+.mapname.here {
+  opacity: 1;
+  font-weight: 700;
+}
+.mappassage {
+  stroke: currentColor;
+  stroke-width: 1.1;
+  opacity: 0.55;
+  fill: none;
+}
+/* A passage whose far room was placed elsewhere: bowed by the
+   drawing, and faded here, so it never reads as a corridor ruled
+   through the rooms it passes over. */
+.mappassage.stretched {
+  opacity: 0.28;
+}
+/* A passage with no bearing on the plane is dashed; one the map
+   could not name at all is dotted. */
+.mappassage.kind-up,
+.mappassage.kind-down,
+.mappassage.kind-in,
+.mappassage.kind-out {
+  stroke-dasharray: 4 3;
+}
+.mappassage.kind-other {
+  stroke-dasharray: 1 3;
+  opacity: 0.4;
+}
+.maplabel {
+  fill: currentColor;
+  font-size: 8px;
+  text-anchor: middle;
+  opacity: 0.7;
+}
+.maparrow {
+  fill: currentColor;
+  opacity: 0.55;
+}
+body.theme-paper #mappane {
+  background: #f2f2f2;
+  color: #222;
+  border-left: 1px solid #d5d5d5;
+}
+body.theme-sepia #mappane {
+  background: #ece2cb;
+  color: #43382a;
+  border-left: 1px solid #d8cbb0;
+}
+body.theme-dark #mappane {
+  background: #171717;
+  color: #cfcfcf;
+  border-left: 1px solid #2c2c2c;
+}
 /* The landing overlay covers the gameport but never hides it:
    GlkOte must measure real geometry the moment it initializes. */
 #landing {
@@ -158,6 +277,7 @@ body.theme-dark .GridWindow .Style_user1 {
 <script src="jquery-1.12.4.min.js" type="text/javascript"></script>
 <script src="glkote.js" type="text/javascript"></script>
 <script src="voxam-audio.js" type="text/javascript"></script>
+<script src="voxam-map.js" type="text/javascript"></script>
 <script src="shell.js" type="text/javascript"></script>
 </head>
 <body class="theme-paper">
@@ -170,6 +290,10 @@ body.theme-dark .GridWindow .Style_user1 {
 <em>Loading...</em>
 </div>
 <div id="errorpane" style="display:none;"><div id="errorcontent">...</div></div>
+</div>
+<div id="mappane">
+<h2>Map</h2>
+<div id="mapdraw"></div>
 </div>
 <div id="landing">
 <h1>V&Theta;X&Delta;M</h1>
