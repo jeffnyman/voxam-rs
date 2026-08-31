@@ -203,7 +203,7 @@ fn wired(arguments: &[String]) -> ExitCode {
     if glkote {
         serve_glkote(&story, seed, identity)
     } else {
-        serve_webbed(&story, seed, port)
+        serve_webbed(&story, seed, port, identity)
     }
 }
 
@@ -294,7 +294,7 @@ fn serve_glkote(path: &str, seed: Option<u32>, identity: Identity) -> ExitCode {
 }
 
 /// Serve one story to the browser, under its own name.
-fn serve_webbed(path: &str, seed: Option<u32>, port: u16) -> ExitCode {
+fn serve_webbed(path: &str, seed: Option<u32>, port: u16, identity: Identity) -> ExitCode {
     let opening = wire_pieces(Path::new(path)).and_then(|(name, bytes, sidecar)| {
         Opening::of(&name, bytes, sidecar).map_err(|error| error.to_string())
     });
@@ -306,20 +306,13 @@ fn serve_webbed(path: &str, seed: Option<u32>, port: u16) -> ExitCode {
         }
     };
 
-    let (session, caption) = match opening {
-        Opening::Glulx { story, blorb } => {
-            let caption = titled(&blorb);
-
-            (web::Session::glulx(story, blorb, seed), caption)
-        }
-        Opening::Aa { story } => (web::Session::aamachine(story, None, seed), None),
-        Opening::Z { story, blorb } => {
-            let caption = titled(&blorb);
-
-            (web::Session::z(story, blorb, seed), caption)
-        }
+    // The story's own name, read before the opening is spent: the
+    // Å-machine carries no Blorb and so no record to be named by.
+    let caption = match &opening {
+        Opening::Glulx { blorb, .. } | Opening::Z { blorb, .. } => titled(blorb),
+        Opening::Aa { .. } => None,
     };
-    let mut face = web::Face::new(session, caption.as_deref());
+    let mut face = web::Face::new(opening.sitting(seed, identity), caption.as_deref());
     let listener = match web::webbed(port) {
         Ok(listener) => listener,
         Err(error) => {

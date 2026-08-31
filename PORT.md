@@ -582,6 +582,22 @@ sweeps prove the outputs identical across all of them.
   mechanism the glass wants for its own Control-C escape when a
   story spins -- and it is deferred, named, until a spinning story
   is worth answering.
+- **The conversation is served two ways from one recognition.**
+  `Opening::serve` blocks on a reader, which suits stdio and a
+  socket and suits a browser not at all -- a page has no blocking
+  read to offer. `Opening::sitting` is the same conversation
+  turned the other way out: hand it one event, take one stanza
+  back, the host holding the clock. The browser face had carried
+  its own copy of that turn since milestone 5; milestone 8 lifted
+  it into `voxam-core::session` beside the facade, so the browser
+  and the wasm faces share one implementation rather than each
+  keeping a version to drift. The web face keeps what is honestly
+  its own -- the icons, the picture road, the page -- and asks the
+  sitting which machine it holds (`Played`) rather than being told
+  a filename. Two things fell out of the lift: `--web` now honours
+  `--interpreter`, which it had parsed and silently dropped, and
+  the thirteen browser-face drills passed unchanged, which is what
+  says the lift was a move and not a rewrite.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes

@@ -373,3 +373,113 @@ fn a_storyless_blorb_refuses_under_a_display_name() {
         "Some Anthology packages no Z-code story to run"
     );
 }
+
+/// The turn-based road: one event in, one stanza out, with the
+/// host holding the clock. The browser face drills it end to end
+/// over HTTP; these hold the shape the wasm face will drive.
+fn sat(name: &str, bytes: Vec<u8>) -> crate::session::Sitting {
+    Opening::of(name, bytes, None)
+        .expect("a loadable story")
+        .sitting(Some(1), Identity::default())
+}
+
+fn stanza(text: &str) -> crate::glkote::json::Object {
+    match crate::glkote::json::loads(text).expect("a stanza") {
+        crate::glkote::json::Value::Object(held) => held,
+        _ => panic!("a stanza is an object"),
+    }
+}
+
+fn told(held: &crate::glkote::json::Object) -> String {
+    crate::glkote::json::dumps(&crate::glkote::json::Value::Object(held.clone()))
+}
+
+const Z_INIT: &str = r#"{"type":"init","gen":0,"support":["timer"],"metrics":{"width":800,"height":480,"gridcharwidth":10,"gridcharheight":20}}"#;
+
+#[test]
+fn a_sitting_opens_on_its_init() {
+    let mut sitting = sat("story.z3", z_image(Z_QUIT));
+    let update = sitting.answer(&stanza(Z_INIT));
+
+    assert!(told(&update).contains(r#""type":"update""#));
+}
+
+// The conversation opens with an init: anything before it is
+// answered with the protocol's own refusal, not a panic.
+#[test]
+fn an_event_before_the_init_is_refused() {
+    let mut sitting = sat("story.z3", z_image(Z_QUIT));
+    let answer = sitting.answer(&stanza(
+        r#"{"type":"line","gen":1,"window":1,"value":"look"}"#,
+    ));
+
+    assert!(told(&answer).contains(r#""type":"error""#));
+    assert!(told(&answer).contains("opens with an init"));
+}
+
+// A story that has already quit still answers every event it is
+// handed -- the host may not have noticed yet.
+#[test]
+fn a_sitting_keeps_answering_after_the_story_ends() {
+    let mut sitting = sat("story.z3", z_image(Z_QUIT));
+
+    sitting.answer(&stanza(Z_INIT));
+
+    let after = sitting.answer(&stanza(
+        r#"{"type":"line","gen":1,"window":1,"value":"look"}"#,
+    ));
+
+    assert!(!told(&after).is_empty());
+}
+
+// An init starts the story over, however far it had gone.
+#[test]
+fn a_second_init_starts_the_story_over() {
+    let mut sitting = sat("story.z3", z_image(Z_QUIT));
+    let first = told(&sitting.answer(&stanza(Z_INIT)));
+    let again = told(&sitting.answer(&stanza(Z_INIT)));
+
+    assert_eq!(first, again);
+}
+
+#[test]
+fn every_machine_takes_a_sitting() {
+    for (name, bytes, init) in [
+        ("story.z3", z_image(Z_QUIT), Z_INIT),
+        (
+            "story.ulx",
+            crate::glulx::testing::image(GLULX_QUIT),
+            r#"{"type":"init","gen":0,"support":["timer"],"metrics":{"width":80,"height":24}}"#,
+        ),
+        (
+            "story.aastory",
+            aa_story(AA_QUIT),
+            r#"{"type":"init","gen":0,"metrics":{"width":800,"height":600},"support":["timer"]}"#,
+        ),
+    ] {
+        let mut sitting = sat(name, bytes);
+        let update = sitting.answer(&stanza(init));
+
+        assert!(
+            told(&update).contains(r#""type":"update""#),
+            "{name} did not answer its init with an update"
+        );
+    }
+}
+
+// Which mark a face should wear, without knowing anything else
+// about the story.
+#[test]
+fn a_sitting_names_the_machine_it_is_played_on() {
+    use crate::session::Played;
+
+    assert_eq!(
+        sat("story.z3", z_image(Z_QUIT)).played(),
+        Played::Z { version: 3 }
+    );
+    assert_eq!(
+        sat("story.ulx", crate::glulx::testing::image(GLULX_QUIT)).played(),
+        Played::Glulx
+    );
+    assert_eq!(sat("story.aastory", aa_story(AA_QUIT)).played(), Played::Aa);
+}

@@ -1,7 +1,18 @@
 //! The browser face: one session served over HTTP, turn by turn.
 
 use super::*;
+use voxam_core::blorb::Blorb;
+use voxam_core::glulx::story::Story as GlulxStory;
 use voxam_core::iff::chunk;
+use voxam_core::session::Opening;
+use voxam_core::zmachine::machine::Identity;
+use voxam_core::zmachine::story::Story as ZStory;
+
+/// A sitting built straight from a story already in hand -- the
+/// recognizer's own road is drilled in the core's own battery.
+fn sat(opening: Opening) -> Sitting {
+    opening.sitting(Some(7), Identity::default())
+}
 
 // The suspension story from the machine tests: open a buffer, ask
 // for a keystroke, select, quit on the far side of the resume.
@@ -139,11 +150,10 @@ fn pictured() -> Blorb {
 /// A Face over a fresh session of the keystroke story.
 fn faced(caption: Option<&str>) -> Face {
     Face::new(
-        Session::glulx(
-            GlulxStory::new(glulx_image(AWAITS_KEY)).unwrap(),
-            Some(pictured()),
-            Some(7),
-        ),
+        sat(Opening::Glulx {
+            story: GlulxStory::new(glulx_image(AWAITS_KEY)).unwrap(),
+            blorb: Some(pictured()),
+        }),
         caption,
     )
 }
@@ -237,9 +247,15 @@ fn the_tab_wears_the_machine_icon() {
     assert_eq!((status, kind.as_str()), (200, "image/x-icon"));
     assert_eq!(&payload[..4], b"\x00\x00\x01\x00");
 
-    let mut zed = Face::new(Session::z(z_story(), Some(pictured()), Some(7)), None);
+    let mut zed = Face::new(
+        sat(Opening::Z {
+            story: z_story(),
+            blorb: Some(pictured()),
+        }),
+        None,
+    );
 
-    assert_eq!(zed.session.icon, "z4.ico");
+    assert_eq!(zed.icon, "z4.ico");
     assert_eq!(
         &zed.respond("GET", "/favicon.ico", b"").2[..4],
         b"\x00\x00\x01\x00"
@@ -361,11 +377,10 @@ fn a_fault_holds_until_the_reload() {
 #[test]
 fn a_file_ask_crosses_the_wire() {
     let mut face = Face::new(
-        Session::glulx(
-            GlulxStory::new(glulx_image(PROMPTS)).unwrap(),
-            Some(pictured()),
-            Some(7),
-        ),
+        sat(Opening::Glulx {
+            story: GlulxStory::new(glulx_image(PROMPTS)).unwrap(),
+            blorb: Some(pictured()),
+        }),
         Some("Saves — Voxam"),
     );
     let first = posted(&mut face, INIT);
@@ -433,7 +448,10 @@ fn z_story() -> ZStory {
 #[test]
 fn a_z_story_serves_through_the_face() {
     let mut face = Face::new(
-        Session::z(z_story(), Some(pictured()), Some(7)),
+        sat(Opening::Z {
+            story: z_story(),
+            blorb: Some(pictured()),
+        }),
         Some("Sensory Jam — Voxam"),
     );
     let first = posted(&mut face, INIT);
@@ -485,7 +503,13 @@ fn a_z_story_serves_through_the_face() {
     );
 
     // An event before any init is told where conversations begin.
-    let mut unopened = Face::new(Session::z(z_story(), Some(pictured()), Some(7)), None);
+    let mut unopened = Face::new(
+        sat(Opening::Z {
+            story: z_story(),
+            blorb: Some(pictured()),
+        }),
+        None,
+    );
 
     assert!(
         at(
@@ -511,7 +535,7 @@ fn entry_of(value: &Value) -> &Object {
 #[test]
 fn an_aa_story_serves_through_the_face() {
     let story = voxam_core::aamachine::story::Story::new(&aa_story_bytes()).unwrap();
-    let mut face = Face::new(Session::aamachine(story, None, Some(7)), None);
+    let mut face = Face::new(sat(Opening::Aa { story }), None);
     let first = posted(&mut face, INIT);
 
     assert_eq!(at(&first, "type").as_str(), Some("update"));
