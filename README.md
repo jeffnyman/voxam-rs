@@ -130,8 +130,36 @@ give one more room than the other; double-click either to put it
 back. The story keeps a readable measure however far the panes
 are pulled, and both the width and the division are remembered.
 
-Still to come -- the Tauri 2 mobile targets, and a wasm face for
-the browser -- `PORT.md` holds the order they arrive in.
+## The browser module
+
+`crates/voxam-wasm` is the interpreter as a page can load it:
+stanzas in, stanzas out, no display of its own. Build both shapes
+with `crates/voxam-wasm/build.sh` -- `no-modules` for a plain
+`<script>` tag, `nodejs` for the sweep that certifies it.
+
+```js
+await wasm_bindgen({ module_or_path: wasmBytes });   // bytes, never a fetch
+
+const story = wasm_bindgen.Story.open(storyBytes, {
+  name: "Curses",        // a label only; the bytes decide what the story is
+  resources,             // a Blorb travelling beside a bare story, if any
+  seed, interpreter, tandy,
+});
+
+story.onStanza(text => GlkOte.update(JSON.parse(text)));
+story.send(JSON.stringify(initEvent));               // the init comes first
+```
+
+Stanzas cross as JSON text, and answers arrive at the listener a
+microtask later rather than being returned -- so the module is the
+same shape as every other transport, and a page's code never forks
+on which one it has. A story that will not load throws; everything
+after is the protocol's own error stanza. Saving needs storage the
+page must provide, so a story that saves is simply told it failed,
+in its own words.
+
+Still to come -- the Tauri 2 mobile targets -- `PORT.md` holds the
+order they arrive in.
 
 ## Building
 

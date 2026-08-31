@@ -1,0 +1,23 @@
+[package]
+name = "voxam-wasm"
+description = "The Voxam interpreter as a browser module: stanzas in, stanzas out"
+# Spelled out rather than inherited: this crate stands outside the
+# workspace, so there is no root to inherit from. `cz bump` keeps
+# it in step with the rest.
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Jeff Nyman"]
+repository = "https://github.com/jeffnyman/voxam-rs"
+
+# Standalone on purpose, as the Tauri shell is: this crate builds
+# only for wasm32-unknown-unknown, and a native `cargo test
+# --workspace` has no business trying to link a cdylib whose
+# imports live in a page.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+voxam-core = { path = "../voxam-core" }
+wasm-bindgen = "0.2"
+js-sys = "0.3"

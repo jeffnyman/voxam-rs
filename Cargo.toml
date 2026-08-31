@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/voxam", "crates/voxam-core", "crates/voxam-glass"]
+# Built only for the browser, so it never rides a native build.
+exclude = ["crates/voxam-wasm"]
 
 [workspace.package]
 version = "0.1.0"

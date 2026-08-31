@@ -24,6 +24,7 @@ voxam-rs/
 ├── Cargo.toml            workspace
 ├── crates/
 │   ├── voxam-core/       the machines and formats; no I/O opinions
+│   ├── voxam-wasm/       the browser module: stanzas in, stanzas out
 │   └── voxam/            the CLI binary: faces, flags, the wire
 ├── desktop/              the Tauri shell: the webview wearing GlkOte
 ├── certify/              the parity sweeps and golden-vector oracles
@@ -60,14 +61,15 @@ stays free of terminal opinions, and testable to the last cell
 through ratatui's TestBackend. The CLI wires it in as the default
 face at a real terminal, `--plain` keeping the stream.
 
-Planned additions, in the order they're earned:
-
-- the Tauri 2 mobile targets of `desktop/`.
-- a `wasm` target of `voxam-core` married to glkote.js — the
-  browser face with no server.
+The `crates/voxam-wasm/` crate arrived with milestone 8: the
+browser module, `voxam-core` compiled for the page and wrapped in
+the thinnest possible face -- bytes in, stanzas out, no display of
+its own. Still to come: the Tauri 2 mobile targets of `desktop/`.
 
 `voxam-core` stays free of display and filesystem opinions so the
-same crate serves the CLI, the shell, and wasm. The seam between
+same crate serves the CLI, the shell, and the page -- a claim
+seven milestones asserted and the wasm build was the first to
+actually test. The seam between
 core and face is the wire: GlkOte-shaped stanzas, extended with a
 `voxam:` sidecar block (location object, printed name, score,
 turns, the moving command) that the deluxe features consume.
@@ -206,11 +208,15 @@ Python (`voxam/src/voxam/`) → Rust, mechanical unless noted.
    every Z recording identical across the two transports, and an
    eyes pass at the real window -- the one thing no headless
    check can stand in for.
-8. **The mobile shell.** Tauri 2 carries `desktop/` to iOS and
+8. **The browser face.** A wasm module speaking the wire, for a
+   page to marry to whatever display it likes -- taken before the
+   mobile shell because a consumer was waiting on it, and because
+   nothing in the mobile work enables it. *Gate:* the browser
+   build diffed byte-identical against the certified stdio path
+   across every Z recording, which `certify/wasm-diff.sh` does.
+9. **The mobile shell.** Tauri 2 carries `desktop/` to iOS and
    Android; the panes earn their keep on a small screen or learn
    another shape.
-9. **The browser face.** A wasm target of `voxam-core` married to
-   glkote.js -- the display with no server behind it.
 
 Milestones 1–4 are mechanical translation with a safety net.
 Milestone 6 is the largest rewrite. Milestone 7 onward is new
@@ -620,6 +626,34 @@ sweeps prove the outputs identical across all of them.
   `.cargo/config.toml`), after which `voxam-core` compiles to wasm
   whole -- which is the first real test of this document's standing
   claim that the core carries no display or filesystem opinions.
+- **The browser module speaks the wire and owns nothing else.**
+  `crates/voxam-wasm` is the thinnest face Voxam has: bytes in, a
+  sitting behind them, stanzas out to a listener. It draws
+  nothing, owns no element, and knows no display library, because
+  the seam between core and face has always been the wire -- and
+  because a module that speaks the wire can be driven by the same
+  typist the sweeps drive. That is what `certify/wasm-diff.sh`
+  does: 42 Z recordings through the browser build and through the
+  certified stdio subject, diffed byte for byte, all identical.
+  A module that owned a display could only ever be judged by eye.
+  Four spellings are deliberate. Stanzas cross as JSON **text**,
+  not objects: the wire's exact spelling is what the sweeps diff,
+  and handing objects over would let the boundary respell them --
+  a page that wants objects is one `JSON.parse` away. The answer
+  is **pushed to a listener** rather than returned, and pushed a
+  **microtask late**, so the module is observably the same shape
+  as the pipe and the socket and no host's page code forks on
+  transport; the queueing resolves a promise and lets the listener
+  be its own continuation, which needs no Rust closure kept alive
+  and so leaks nothing per turn. And the module **throws exactly
+  once**, for a story that will not load; everything after is the
+  protocol's own error stanza. Two builds come from the one wasm
+  -- `no-modules` for a page with a nonce'd script tag and no
+  bundler, `nodejs` for the sweep -- so what is certified is what
+  ships. Play-only was confirmed on the target itself rather than
+  assumed: `std::fs` there *refuses* rather than panicking, so a
+  story that saves is told "Failed." in its own words whether the
+  host cancels the prompt or answers it with a name.
 - **Control-C dies the reference's death by hand.** blessed's
   cbreak leaves SIGINT alive, so the reference session ends on
   the keypress; crossterm's raw mode eats it, so the intakes

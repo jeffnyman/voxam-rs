@@ -1,6 +1,7 @@
 # Generated project files
 /target
 /desktop/src-tauri/target
+/crates/voxam-wasm/target
 /desktop/src-tauri/gen
 /desktop/node_modules
 __pycache__
