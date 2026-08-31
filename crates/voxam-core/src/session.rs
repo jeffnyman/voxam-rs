@@ -56,17 +56,26 @@ pub enum Opening {
 impl Opening {
     /// Recognize and load a story from its own bytes.
     ///
-    /// The name decides the container question, as the reference
-    /// loaders decide it by suffix; the sidecar is whatever
-    /// like-named resource file the caller found beside a bare
-    /// story, ignored by the machines that carry their own.
+    /// The bytes decide the container question and the name is
+    /// only a hint: the reference loaders go by suffix because a
+    /// path always has one, but a host that never touched a
+    /// filesystem has only a title to offer -- the wasm face
+    /// passes the story's display name -- and a Blorb announces
+    /// itself in its first bytes regardless (`FORM`/`IFRS`). A
+    /// name wearing a Blorb suffix is still believed, so a
+    /// container the sniffer somehow missed is opened as the
+    /// player asked.
+    ///
+    /// The sidecar is whatever like-named resource file the
+    /// caller found beside a bare story, ignored by the machines
+    /// that carry their own.
     pub fn of(name: &str, bytes: Vec<u8>, sidecar: Option<Vec<u8>>) -> Result<Self, VoxamError> {
         let sidecar = match sidecar {
             Some(held) => Some(Blorb::parse(&held)?),
             None => None,
         };
 
-        if blorbish(name) {
+        if blorbish(name) || matches!(sniff(&bytes), Some(StoryFormat::Blorb)) {
             let blorb = Blorb::parse(&bytes)?;
 
             if let Some(packaged) = blorb.glulx() {

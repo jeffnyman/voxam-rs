@@ -334,3 +334,42 @@ fn serves_an_aa_story_to_its_quit() {
     assert!(clean);
     assert!(wire.contains(r#""type":"update""#));
 }
+
+// A host that never touched a filesystem has only a title to
+// offer: the wasm face passes the story's display name, with no
+// suffix to read. A Blorb announces itself in its own first
+// bytes, so the container is recognized regardless.
+#[test]
+fn a_blorb_is_known_by_its_bytes_under_a_display_name() {
+    let packaged = blorb_bytes(&[(*b"Exec", 0, *b"ZCOD", z_image(Z_QUIT))]);
+    let opening = Opening::of("Curses", packaged, None).expect("a loadable story");
+
+    assert!(matches!(opening, Opening::Z { blorb: Some(_), .. }));
+}
+
+#[test]
+fn a_glulx_blorb_is_known_by_its_bytes_too() {
+    let packaged = blorb_bytes(&[(
+        *b"Exec",
+        0,
+        *b"GLUL",
+        crate::glulx::testing::image(GLULX_QUIT),
+    )]);
+    let opening = Opening::of("Counterfeit Monkey", packaged, None).expect("a loadable story");
+
+    assert!(matches!(opening, Opening::Glulx { blorb: Some(_), .. }));
+}
+
+// And the refusal still speaks the caller's own word for the
+// story, whether that word is a filename or a title.
+#[test]
+fn a_storyless_blorb_refuses_under_a_display_name() {
+    let Err(refused) = Opening::of("Some Anthology", blorb_bytes(&[]), None) else {
+        panic!("a storyless blorb must refuse");
+    };
+
+    assert_eq!(
+        refused.to_string(),
+        "Some Anthology packages no Z-code story to run"
+    );
+}
