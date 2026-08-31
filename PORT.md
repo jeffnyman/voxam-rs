@@ -249,6 +249,70 @@ choice, poisonous as a core assumption. Persisted map layouts key
 by IFID, per milestone 7's standing plan, which is part of why
 the Babel identities work eventually matters.
 
+## The map the shell draws
+
+The automapper is the first work here with no reference to port
+from, so its reasoning is written down rather than inherited. It
+lives in the shell's own Rust (`desktop/src-tauri/src/map.rs`),
+which is where the boundary above puts it: reading a typed command
+for its compass word is an English-only, typed-input-only
+heuristic, fine as a face's choice and poisonous as a core
+assumption. The webview only draws what this module decides.
+
+The rules, each earned:
+
+- **Rooms are keyed by the location object**, so a room is never
+  drawn twice and a renamed one (a dark room lit) keeps its place
+  under its newest name. **Passages are directed**: one-way doors
+  are ordinary in this medium, so walking north from A to B says
+  nothing about walking south from B, and the reciprocal edge is
+  drawn only when it is walked. **A placed room never moves** --
+  the map is watched while it grows, and a layout that reshuffles
+  under the player's eye is worse than a crooked corridor.
+- **Up, down, in and out are marked edges on one plane**, not
+  floors to page between: which floor a room belongs to is often
+  unanswerable, and a marked edge never has to answer it.
+- **Only what was walked is drawn.** The sidecar carries no exit
+  list, and inferring untaken exits would mean reading room
+  descriptions as prose -- the heuristic the boundary forbids.
+- **A discontinuity draws nothing.** The interpreter's own bit
+  says an undo, restore, restart, or death intervened, which
+  spares the map every transcript-grepping guess earlier
+  automappers needed.
+
+Three of the rules exist because the corpus said so, not because
+they were foreseen. The recordings were replayed through the
+mapper itself (`mapwalk`, the shell's own instrument, fed by the
+wire sweeps' driver under `VOXAM_SIDECAR=1`), and each finding
+changed the design:
+
+- **A line may hold several commands.** The house parsers all
+  take `d. s. e`, the recordings lean on it heavily, and the wire
+  reports one update at the *end* of the run. Drawing an edge
+  across it claimed an adjacency that does not exist -- 48 of
+  Zork's 64 passages were fiction on the first pass. A chain now
+  draws no passage at all; when every leg was a compass word the
+  destination is still *placed* by the summed vector, which beats
+  a bare spiral. Zork's map fell to 20 passages, every one real.
+- **Ships have their own compass.** `fore`, `aft`, `port`, and
+  `sb` are directions wherever a game gives the player a vessel;
+  they are most of Hitchhiker's movement, and laying them on the
+  compass (consistently, making no claim about geography) took
+  its readable passages from 12 to 23.
+- **Some stories keep no location at all.** The location global
+  is guaranteed only through Version 3 and conventional after
+  (§8), and Adventure's Version 5 build reports one unchanging
+  object named `Ob.ect` however far the player walks. A map cannot
+  tell a wrong number from a right one, but it can notice that a
+  dozen direction commands in a row moved the player nowhere --
+  chains counted too, since that recording travels in them -- and
+  say plainly that this story does not report where the player is.
+  That is better than drawing one fictional room forever.
+
+Persistence is one JSON file per IFID beside the display
+settings, written only when the map actually grew, so a session
+spent examining the scenery rewrites nothing.
+
 ## Departures the port has recorded
 
 Each is a documented translation, never a behaviour change; the

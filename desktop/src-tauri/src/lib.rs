@@ -19,7 +19,8 @@
 //! missing-interpreter refusal, the console-window suppression,
 //! and the `--babel` subprocess a title bar used to cost.
 
-mod sidecar;
+pub mod map;
+pub mod sidecar;
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,7 @@ use voxam_core::pipe;
 use voxam_core::session::Opening;
 use voxam_core::zmachine::machine::Identity;
 
+use crate::map::Map;
 use crate::sidecar::Bearings;
 
 /// The exit codes the CLI spoke, kept for the page's ended bar: 0
@@ -272,6 +274,13 @@ struct Shell {
     /// stands, and how they got there. The deluxe panes read it;
     /// an ungranted or silent session leaves it as it was.
     bearings: Mutex<Option<Bearings>>,
+    /// The map of the story being played, grown from those
+    /// bearings and kept under the story's IFID.
+    map: Mutex<Map>,
+    /// That IFID: the Treaty's own name for the story, which is
+    /// what a map is filed under. A story the treaty cannot name
+    /// keeps its map only for the session.
+    ifid: Mutex<Option<String>>,
 }
 
 /// Remember the chosen story and wear its name on the title bar.
@@ -445,6 +454,17 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
     // this one's, and a pane must never draw them as such.
     state.bearings.lock().unwrap().take();
 
+    // The story's map comes back from the last time it was
+    // played, under the Treaty's own name for it. A story the
+    // treaty cannot name keeps its map only for this session.
+    let ifid = identified(&name, &bytes);
+
+    *state.map.lock().unwrap() = ifid
+        .as_deref()
+        .map(|held| load_map(&app, held))
+        .unwrap_or_default();
+    *state.ifid.lock().unwrap() = ifid;
+
     let id = state.minted.fetch_add(1, Ordering::SeqCst) + 1;
 
     let (to_session, from_host) = pipe::pipe();
@@ -537,9 +557,28 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
                     // webview is left to wear the display alone.
                     if let Some(bearings) = Bearings::of(&stanza) {
                         let state = pump.state::<Shell>();
-                        let mut held = state.bearings.lock().unwrap();
 
-                        *held = Some(bearings);
+                        *state.bearings.lock().unwrap() = Some(bearings.clone());
+
+                        // The map grows here, and is written only
+                        // when it actually grew: a session spent
+                        // examining the scenery rewrites nothing.
+                        let mut map = state.map.lock().unwrap();
+                        let before = (map.rooms.len(), map.edges.len(), map.here, map.unreliable);
+
+                        map.observe(&bearings);
+
+                        let after = (map.rooms.len(), map.edges.len(), map.here, map.unreliable);
+
+                        if before != after {
+                            let held = map.clone();
+
+                            drop(map);
+
+                            if let Some(ifid) = state.ifid.lock().unwrap().as_deref() {
+                                save_map(&pump, ifid, &held);
+                            }
+                        }
                     }
 
                     let _ = pump.emit("stanza", json!({"id": id, "stanza": stanza}));
@@ -586,6 +625,71 @@ fn sidecar_of(story: &Path) -> Option<Vec<u8>> {
         .map(|held| story.with_extension(held))
         .find(|beside| beside.exists())
         .and_then(|beside| std::fs::read(beside).ok())
+}
+
+/// The story's IFID: the Treaty of Babel's own name for it, and
+/// what a map is filed under. A Blorb's iFiction record answers
+/// first, then the packaged or loose story's own bytes (Babel:
+/// The IFID for a blorbed story file).
+fn identified(name: &str, bytes: &[u8]) -> Option<String> {
+    let blorbed = name.rsplit_once('.').is_some_and(|(_, suffix)| {
+        voxam_core::session::BLORB_SUFFIXES.contains(&suffix.to_lowercase().as_str())
+    });
+
+    if !blorbed {
+        return voxam_core::babel::ifid(bytes);
+    }
+
+    let blorb = voxam_core::blorb::Blorb::parse(bytes).ok()?;
+    let record = blorb
+        .ifiction
+        .as_deref()
+        .and_then(voxam_core::babel::ifiction);
+
+    record.and_then(|held| held.ifid).or_else(|| {
+        blorb
+            .glulx()
+            .or_else(|| blorb.story())
+            .and_then(voxam_core::babel::ifid)
+    })
+}
+
+/// Where a story's map is kept: one file per IFID, beside the
+/// display settings.
+fn map_path(app: &AppHandle, ifid: &str) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("maps").join(format!("{ifid}.json")))
+}
+
+fn load_map(app: &AppHandle, ifid: &str) -> Map {
+    map_path(app, ifid)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|held| serde_json::from_str(&held).ok())
+        .unwrap_or_default()
+}
+
+/// Best effort, as the other settings are: a map that cannot be
+/// kept is not worth interrupting a story over.
+fn save_map(app: &AppHandle, ifid: &str, map: &Map) {
+    let Some(path) = map_path(app, ifid) else {
+        return;
+    };
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    if let Ok(held) = serde_json::to_string(map) {
+        let _ = std::fs::write(path, held);
+    }
+}
+
+/// The map of the story being played, as far as it is walked.
+#[tauri::command]
+async fn walked_map(state: State<'_, Shell>) -> Result<Map, String> {
+    Ok(state.map.lock().unwrap().clone())
 }
 
 /// Where the player stands, as the wire last reported it.
@@ -844,7 +948,8 @@ pub fn run() {
             display_settings,
             story_home,
             set_home,
-            bearings
+            bearings,
+            walked_map
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")
