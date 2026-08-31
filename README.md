@@ -124,6 +124,16 @@ cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+The shell stands outside the workspace, so it gates on its own --
+its map and sidecar reading are ordinary Rust with ordinary tests:
+
+```sh
+cd desktop/src-tauri
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
 The deeper certification -- every sweep diffing this port against
 the Python reference over real story files, recordings, and gold
 transcripts -- lives in `certify/`, with its own README.

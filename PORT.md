@@ -230,6 +230,18 @@ block at all):
   automappers needed, and the mapper never draws a phantom edge
   across time travel.
 
+The desktop shell granted the token with milestone 7 (its own
+vendored `glkote.js` asks for `voxam` beside `stage` and the other
+dialect words), and reads the block **in its own Rust**, in the
+pump, before the stanza ever reaches the page: the deluxe
+features' intelligence lives on the host side, and the webview is
+left to wear the display alone. `sidecar::Bearings` is that
+reading -- every field optional, a half-written location refused
+rather than half-believed -- and its battery is pinned by blocks
+captured from live Zork I sessions, never written by hand. The
+browser face stays ungranted: it has no panes to feed, and an
+ungranted session carries no block at all.
+
 And a boundary: no direction-parsing or graph state in
 `voxam-core`. Reading a typed command for its compass word is an
 English-only, typed-input-only heuristic — fine as a face's

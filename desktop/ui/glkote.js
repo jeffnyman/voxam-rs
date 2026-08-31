@@ -2491,11 +2491,14 @@ function send_response(type, win, val, val2) {
     else if (type == 'init') {
         res.metrics = val;
         /* VOXAM: 'sound' advertises the dialect voxam-audio.js
-           plays, 'colors' the per-span ink this page renders, and
+           plays, 'colors' the per-span ink this page renders,
            'stage' the scaled canvases with placed text, shifts,
-           and an emplaced editor that carry the Version 6 screen;
-           stock GlkOte has none of these words. */
-        res.support = ['timer', 'graphics', 'graphicswin', 'graphicsext', 'hyperlinks', 'sound', 'colors', 'stage'];
+           and an emplaced editor that carry the Version 6 screen,
+           and 'voxam' asks for the sidecar block the deluxe panes
+           read -- the shell's own Rust takes it off each update
+           before this page ever sees the stanza, so nothing here
+           consumes it. Stock GlkOte has none of these words. */
+        res.support = ['timer', 'graphics', 'graphicswin', 'graphicsext', 'hyperlinks', 'sound', 'colors', 'stage', 'voxam'];
     }
     else if (type == 'arrange') {
         res.metrics = val;

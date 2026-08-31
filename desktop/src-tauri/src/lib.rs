@@ -19,6 +19,8 @@
 //! missing-interpreter refusal, the console-window suppression,
 //! and the `--babel` subprocess a title bar used to cost.
 
+mod sidecar;
+
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -30,6 +32,8 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, Wry};
 use voxam_core::pipe;
 use voxam_core::session::Opening;
 use voxam_core::zmachine::machine::Identity;
+
+use crate::sidecar::Bearings;
 
 /// The exit codes the CLI spoke, kept for the page's ended bar: 0
 /// for a session that ended cleanly, 2 for one that faulted.
@@ -264,6 +268,10 @@ struct Shell {
     display: Mutex<Display>,
     home: Mutex<Home>,
     minted: AtomicU64,
+    /// The last bearings the wire reported: where the player
+    /// stands, and how they got there. The deluxe panes read it;
+    /// an ungranted or silent session leaves it as it was.
+    bearings: Mutex<Option<Bearings>>,
 }
 
 /// Remember the chosen story and wear its name on the title bar.
@@ -433,6 +441,10 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
     // note in PORT.md.
     held.take();
 
+    // A new story starts nowhere: the last one's bearings are not
+    // this one's, and a pane must never draw them as such.
+    state.bearings.lock().unwrap().take();
+
     let id = state.minted.fetch_add(1, Ordering::SeqCst) + 1;
 
     let (to_session, from_host) = pipe::pipe();
@@ -519,6 +531,17 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
             // in voxam's own words; it travels as a fault verbatim.
             match serde_json::from_str::<Value>(text) {
                 Ok(stanza) => {
+                    // The sidecar is read here, before the page
+                    // ever sees the stanza: the deluxe features'
+                    // intelligence lives in this Rust, and the
+                    // webview is left to wear the display alone.
+                    if let Some(bearings) = Bearings::of(&stanza) {
+                        let state = pump.state::<Shell>();
+                        let mut held = state.bearings.lock().unwrap();
+
+                        *held = Some(bearings);
+                    }
+
                     let _ = pump.emit("stanza", json!({"id": id, "stanza": stanza}));
                 }
                 Err(_) => {
@@ -536,7 +559,10 @@ async fn start_session(app: AppHandle, state: State<'_, Shell>) -> Result<u64, S
             held.take();
             drop(held);
 
-            let _ = pump.emit("ended", json!({"id": id, "code": verdict.load(Ordering::SeqCst)}));
+            let _ = pump.emit(
+                "ended",
+                json!({"id": id, "code": verdict.load(Ordering::SeqCst)}),
+            );
         }
     });
 
@@ -560,6 +586,15 @@ fn sidecar_of(story: &Path) -> Option<Vec<u8>> {
         .map(|held| story.with_extension(held))
         .find(|beside| beside.exists())
         .and_then(|beside| std::fs::read(beside).ok())
+}
+
+/// Where the player stands, as the wire last reported it.
+///
+/// The panes ask this; a session that grants no sidecar, or one
+/// that has not yet said anything, answers with nothing at all.
+#[tauri::command]
+async fn bearings(state: State<'_, Shell>) -> Result<Option<Bearings>, String> {
+    Ok(state.bearings.lock().unwrap().clone())
 }
 
 /// The settings the page dresses in, asked at every load.
@@ -808,7 +843,8 @@ pub fn run() {
             send_stanza,
             display_settings,
             story_home,
-            set_home
+            set_home,
+            bearings
         ])
         .build(tauri::generate_context!())
         .expect("the shell could not be built")
